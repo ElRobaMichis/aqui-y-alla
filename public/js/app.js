@@ -218,7 +218,7 @@ function renderRoom(code) {
   <div class="room" data-tab="${state.tab}">
     <header class="topbar">
       <div class="wordmark">aquí <span class="amp">&amp;</span> allá</div>
-      <button class="code-stamp" id="share" title="Copiar invitación">${icon('link')}sala <b id="room-code">${esc(code)}</b></button>
+      <button class="code-stamp" id="share" title="Copiar invitación">${icon('link')}<span class="lbl">sala</span> <b id="room-code">${esc(code)}</b></button>
       <div class="spacer"></div>
       <div class="signal" id="signal" data-q="0" title="Calidad de conexión"><i></i><i></i><i></i><i></i><span>…</span></div>
       <button class="icon-btn ${audio.isMusicOn() ? '' : 'is-off'}" id="music" aria-label="Música">${icon('music')}${icon('off', 'slash')}</button>

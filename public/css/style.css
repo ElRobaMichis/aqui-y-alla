@@ -247,6 +247,8 @@ svg.icon { width: 22px; height: 22px; display: block; flex: none; }
   height: var(--vv-h, 100dvh);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  /* minmax(0, …): nada de adentro puede hacer la página más ancha que la pantalla */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "top" "main" "tabs";
 }
 .topbar {
@@ -256,6 +258,7 @@ svg.icon { width: 22px; height: 22px; display: block; flex: none; }
   border-bottom: var(--bw) solid var(--ink);
   background: var(--paper);
   position: relative; z-index: 5;
+  min-width: 0;
 }
 .topbar .wordmark { font-size: 22px; white-space: nowrap; }
 .topbar .spacer { flex: 1; }
@@ -267,7 +270,22 @@ svg.icon { width: 22px; height: 22px; display: block; flex: none; }
   font-weight: 800; font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-2);
 }
 .code-stamp b { font-family: var(--display); font-size: 17px; letter-spacing: .16em; color: var(--ink); }
-.code-stamp svg { width: 16px; height: 16px; }
+.code-stamp svg { width: 16px; height: 16px; flex: none; }
+.code-stamp { min-width: 0; flex: none; }
+
+/* teléfonos: la barra de arriba tiene que caber con el código de 6 letras */
+@media (max-width: 430px) {
+  .topbar { gap: 6px; }
+  .code-stamp { padding: 0 8px; gap: 5px; }
+  .code-stamp .lbl { display: none; }
+  .code-stamp b { font-size: 16px; letter-spacing: .08em; }
+  .topbar .icon-btn { width: 40px; height: 40px; }
+  .signal { padding-inline: 2px; }
+  .signal span { min-width: 0; margin-left: 3px; font-size: 10px; line-height: 1.1; width: 2.6em; }
+}
+@media (max-width: 350px) {
+  .signal span { display: none; }
+}
 
 .signal { display: inline-flex; align-items: flex-end; gap: 2px; height: 36px; padding: 0 4px 9px; position: relative; }
 .signal i { width: 4px; background: var(--ink-3); border-radius: 1px; opacity: .35; transition: background-color .3s, opacity .3s; }
@@ -354,7 +372,7 @@ svg.icon { width: 22px; height: 22px; display: block; flex: none; }
 .pc-slot.right .country { right: auto; left: 6px; }
 
 .who { text-align: center; display: grid; gap: 2px; min-width: 0; max-width: 100%; }
-.who b { font-family: var(--display); font-size: 19px; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who b { font-family: var(--display); font-size: clamp(15px, 4.6vw, 19px); line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 800; color: var(--ink-2); }
 .status::before { content: ""; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--ink); background: var(--ink-3); }
 .status.on::before { background: var(--mint); }
