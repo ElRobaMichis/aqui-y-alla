@@ -32,7 +32,7 @@ export class Mqtt {
    */
   constructor(url, o) {
     this.connected = false;
-    this.onconnect = this.onmessage = this.onclose = this.onpong = null;
+    this.onconnect = this.onmessage = this.onclose = this.onpong = this.onopen = null;
     this.ids = 0;
     this.acks = new Map();   // packet id -> resolver (PUBACK/SUBACK/UNSUBACK)
     this.buf = EMPTY;
@@ -46,6 +46,7 @@ export class Mqtt {
       const parts = [str('MQTT'), new Uint8Array([4, flags]), u16(o.keepalive ?? 60), str(o.clientId)];
       if (w) parts.push(str(w.topic), lp(w.payload ?? EMPTY));
       this.raw(packet(0x10, parts));
+      try { this.onopen?.(); } catch (e) { console.warn(e); }
     };
     ws.onmessage = (ev) => this.feed(new Uint8Array(ev.data));
     ws.onclose = () => this.down();

@@ -46,6 +46,7 @@ const BROKERS = (new URLSearchParams(location.search).get('broker') || '').split
 ]);
 const KEEPALIVE = 60;          // s; el repetidor da por muerta la conexión a los ~90 s sin nada
 const PING_EVERY = 10_000;     // ping al repetidor (y al líder) para medir latencia y detectar zombis
+const PING_IDLE = 25_000;     // sin partida ni actividad reciente basta con esto (ahorra datos)
 const PONG_GRACE = 7_000;      // sin respuesta en este tiempo => reconectar
 const RESEND_AFTER = 5_000;    // mensajes sin confirmar se reenvían
 const BACKOFF = [0, 500, 1000, 2000, 4000, 8000, 15000];
@@ -54,10 +55,10 @@ const HELLO_RETRY = 3500;
 const HELLO_FAST = 600;        // margen para un "hola" que se cruzó con el anuncio del líder
 // cada guardado sube la sala entera (~6 KB) al repetidor: según qué cambió, se espera más o menos
 // para juntar varios cambios en una sola subida
-const SAVE_SOON = 350;          // jugadas e invitaciones: que no se pierdan si este teléfono se apaga
-const SAVE_LATER = 1500;        // chat, entradas y salidas (los mensajes quedan protegidos hasta guardarse)
-const PRES_REFRESH = 50_000;   // la presencia se renueva; si se queda vieja, no cuenta
-const PRES_STALE = 150_000;
+const SAVE_SOON = 2000;          // jugadas e invitaciones: que no se pierdan si este teléfono se apaga
+const SAVE_LATER = 8000;        // chat, entradas y salidas (los mensajes quedan protegidos hasta guardarse)
+const PRES_REFRESH = 110_000;   // la presencia se renueva; si se queda vieja, no cuenta
+const PRES_STALE = 330_000;
 export const CODE_LEN = 6;
 const CODE_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // sin I ni O para no confundir
 
@@ -155,6 +156,11 @@ let recvQ = Promise.resolve(), sendQ = Promise.resolve();
 
 export const getStatus = () => status;
 export const getRtt = () => rtt;
+/** Latencia de MI conexión al repetidor (ms), o null si aún no se sabe. */
+export const getLinkRtt = () => (mqRtt ? Math.round(mqRtt) : null);
+let liveGame = false, lastActive = 0, lastPingAt = 0;
+/** La app avisa si hay partida: entonces los pings van seguidos (detectar cortes rápido). */
+export function setLive(on) { liveGame = !!on; }
 /** La conexión tiene cosas atoradas por salir (señal mala): mejor no mandar lo que no es urgente. */
 export const congested = () => (mq?.ws?.bufferedAmount ?? 0) > 2048;
 export const getSession = () => session;
@@ -351,6 +357,26 @@ async function connect() {
     will: { topic: T('c/' + conn), payload: EMPTY, retain: true },
   });
   mq = c;
+  // la presencia se cifra mientras abre la conexión, para mandarla pegada al CONNECT
+  const presVis = !document.hidden;
+  const presSealed = seal(k, myPres());
+  let subP = null;
+  c.onopen = () => {
+    // CONNECT ya salió; lo demás va justo detrás sin esperar la respuesta (los repetidores lo
+    // aceptan): una ida y vuelta menos al conectar
+    const prevKey = K + 'conn:' + k.code;
+    let prev = null;
+    try { prev = sessionStorage.getItem(prevKey); sessionStorage.setItem(prevKey, conn); } catch {}
+    // si la conexión anterior de este dispositivo murió sin avisar, borrar su presencia
+    // (se recuerda por pestaña, no por dispositivo: otra pestaña abierta en la misma sala sigue
+    // viva, y a esa el líder la reemplaza con aviso cuando llegue mi "hola")
+    if (prev && prev !== conn) c.publish(T('c/' + prev), EMPTY, { retain: true });
+    // (el estado guardado "s" no: al invitado no le hace falta, y quien vaya a llevar la sala
+    // lo pide en freshestSnapshot)
+    subP = c.subscribe([T('c/+'), T('to/' + conn)]);
+    subP.catch(() => {});
+    presSealed.then((b) => { if (mq === c && !c.closed) c.publish(T('c/' + conn), b, { retain: true }); }, () => {});
+  };
 
   // en redes lentas el handshake tarda: el límite crece con cada intento
   // si la red es conocida y buena, un intento que no abre en unos segundos está atorado (pasa
@@ -375,16 +401,11 @@ async function connect() {
     noteMqRtt((Date.now() - openAt) / 4);
     brokerFails = 0;
     mqLastPong = Date.now();
-    // si la conexión anterior de este dispositivo murió sin avisar, borrar su presencia
-    // (se recuerda por pestaña, no por dispositivo: otra pestaña abierta en la misma sala sigue
-    // viva, y a esa el líder la reemplaza con aviso cuando llegue mi "hola")
-    const prevKey = K + 'conn:' + keys.code;
-    let prev = null;
-    try { prev = sessionStorage.getItem(prevKey); sessionStorage.setItem(prevKey, conn); } catch {}
-    if (prev && prev !== conn) c.publish(T('c/' + prev), EMPTY, { retain: true });
-    publishPresence();
-    sSubscribed = true;
-    try { await c.subscribe([T('c/+'), T('s'), T('to/' + conn)]); } catch { if (mq === c) retry(); return; }
+    pres.set(conn, myPres());
+    // (si la visibilidad cambió mientras abría, la presencia que salió pegada ya es vieja)
+    if (!subP || pres.get(conn).vis !== presVis) publishPresence();
+    sSubscribed = false;
+    try { await (subP ?? c.subscribe([T('c/+'), T('to/' + conn)])); } catch { if (mq === c) retry(); return; }
     if (mq !== c) return;
     settleTimer = setTimeout(() => {
       sSettled = true;
@@ -487,6 +508,10 @@ function onPresence(id, p) {
     // otro tomó la sala después que yo (típico: el teléfono durmió mi página, me dieron por
     // ausente y desperté creyéndome líder). Su estado es el bueno.
     if (leading && p.lead && p.lt > myTurn) abdicate();
+    // ya se ve un líder presente y visible: no hace falta esperar el resto de lo retenido para
+    // saludarlo (medio segundo menos al entrar o volver). Si resulta que no era él, los
+    // reintentos del "hola" lo corrigen.
+    if (!ready && p.lead && p.vis && mq?.connected) ready = true;
   }
   elect();
 }
@@ -608,7 +633,8 @@ async function becomeLeader() {
     if (mq !== c || !c.connected) return;
     let want = 0;
     for (const p of pres.values()) if (p.conn !== conn) want = Math.max(want, p.sv || 0);
-    let snap = await freshestSnapshot(want);
+    // (una sala recién creada no puede tener nada guardado: no hay que esperar a ver)
+    let snap = joinReq.create && !want ? null : await freshestSnapshot(want);
     if (mq !== c || !c.connected) return;
     if (computeLeader() !== conn) return;
     if (!retained && !joinReq.create) {
@@ -660,8 +686,9 @@ const coreOut = {
     const e = { k: 'down', from: conn, m: o };
     if (o.t !== 'g:aim') e.fv = flushedSv; // (la puntería va muchas veces por segundo: sin extras)
     if (o.t === 'chat') e.hv = latest && latest.seq >= o.m.id ? sv : sv + 1;
-    else if (o.t === 'welcome') e.hv = sv + 1; // tras cada "hola" viene un guardado
-    pubEnc(T('to/' + to), e);
+    else if (o.t === 'welcome') e.hv = o.ns ? sv : sv + 1; // tras un "hola" viene un guardado (salvo ns)
+    // la bienvenida (historial) y el estado del juego pesan: comprimidos ocupan menos de la mitad
+    pubEnc(T('to/' + to), e, { zip: o.t === 'welcome' || o.t === 'g:state' });
   },
   kick(to, code) {
     if (to === conn) queueMicrotask(() => onKick(code));
@@ -727,6 +754,7 @@ function flushRemote() {
 /** Manda un mensaje "al servidor": al room-core local si soy líder, o al líder por el repetidor. */
 function up(m) {
   if (!mq?.connected) return false;
+  if (m.t !== 'ping' && m.t !== 'away') lastActive = Date.now();
   if (leading && !resigning && core) { core.message(conn, m); return true; }
   if (!leader || leader === conn) return false;
   pubEnc(T('to/' + leader), { k: 'up', from: conn, m });
@@ -873,6 +901,9 @@ function ping(force) {
   const now = performance.now();
   // al repetidor: siempre (mantiene viva la conexión), es un paquete de 2 bytes
   if (mqAwait && now - mqAwait > slow(PONG_GRACE, 4)) { retry(); return; }
+  // sin partida ni actividad: un ping cada 25 s basta (la conexión del celular aguanta minutos)
+  if (!force && !liveGame && Date.now() - lastActive > 30_000 && now - lastPingAt < PING_IDLE - 1000) return;
+  lastPingAt = now;
   if (!mqAwait) { mqAwait = now; mq.ping(); }
   // al líder: solo con la app visible (latencia real entre los dos y detectar si se murió)
   if (leading || !welcomed || !leader || (document.hidden && !force)) return;

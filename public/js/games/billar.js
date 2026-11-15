@@ -72,6 +72,7 @@ export function mount(root, ctx) {
   let spin = { sx: 0, sy: 0 };
   let cuePos = null;            // dónde está la blanca en mano
   let remoteAim = null;         // puntería del otro { dx, dy, p, sx, sy, cx, cy }
+  let aimGap = 150, lastAimAt = 0; // cada cuánto llega su puntería (ms), para suavizarla a ese ritmo
   let shownAim = null;          // la que se dibuja (suavizada)
   const orient = new Map();
   let view = null;              // transformación mesa → pantalla
@@ -477,8 +478,9 @@ export function mount(root, ctx) {
     const frameDt = Math.min(0.1, lastFrameAt ? (now - lastFrameAt) / 1000 : 1 / 60);
     lastFrameAt = now;
     if (remoteAim && shownAim) {
-      // suavizar la puntería que llega por red; igual de suave a 60, 120 o 144 Hz
-      const k = 1 - Math.exp(-frameDt * 22);
+      // suavizar la puntería que llega por red al ritmo en que llega; igual de suave a 60, 120 o 144 Hz
+      const tau = Math.max(0.045, aimGap / 2000);
+      const k = 1 - Math.exp(-frameDt / tau);
       const nx = shownAim.dx + (remoteAim.dx - shownAim.dx) * k, ny = shownAim.dy + (remoteAim.dy - shownAim.dy) * k;
       const l = Math.hypot(nx, ny) || 1;
       shownAim.dx = nx / l; shownAim.dy = ny / l;
@@ -687,12 +689,9 @@ export function mount(root, ctx) {
 
   // la puntería en vivo es lo que más datos gasta: con buena señal se manda seguido, con
   // señal mala cada vez menos, y con señal pésima nada (el otro solo ve el tiro)
-  function aimEvery() {
-    const rtt = ctx.rtt();
-    let ms = rtt == null ? 150 : rtt < 150 ? 100 : rtt < 300 ? 160 : rtt < 600 ? 300 : rtt < 1200 ? 600 : 0;
-    if (ms && navigator.connection?.saveData) ms *= 2;
-    return ms;
-  }
+  // (la latencia no cambia cuántas veces se manda: solo retrasa todo por igual. Lo que sí
+  // importa es no apilar si la red está atascada, y eso lo revisa ctx.busy())
+  function aimEvery() { return ctx.direct?.() ? 70 : 150; }
   const q4 = (v) => Math.round(v * 1e4) / 1e4; // (es solo para dibujar: no hace falta más precisión)
   function sendAim() {
     if (!myTurn()) return;
@@ -709,7 +708,8 @@ export function mount(root, ctx) {
       if (round().hand && cuePos) { a.cx = q4(cuePos.x); a.cy = q4(cuePos.y); }
       ctx.send({ t: 'g:aim', a });
     };
-    if (now - lastAimSent > every) doSend();
+    // (si ya había uno programado, se cancela: si no, salían dos casi juntos)
+    if (now - lastAimSent >= every) { clearTimeout(aimTimer); doSend(); }
     else if (!aimTimer) aimTimer = setTimeout(doSend, every - (now - lastAimSent));
   }
 
@@ -886,6 +886,9 @@ export function mount(root, ctx) {
     aim(a) {
       if (!g || myTurn() || anim) return;
       if (!Number.isFinite(a.dx) || !Number.isFinite(a.dy)) return;
+      const t = performance.now();
+      if (lastAimAt) aimGap = aimGap * 0.7 + Math.min(600, t - lastAimAt) * 0.3;
+      lastAimAt = t;
       remoteAim = { dx: a.dx, dy: a.dy, p: a.p || 0, sx: a.sx || 0, sy: a.sy || 0, cx: a.cx, cy: a.cy };
       if (!shownAim) shownAim = { ...remoteAim };
       dirty = true; kick();

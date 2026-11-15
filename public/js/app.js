@@ -385,11 +385,13 @@ function renderChatHead() {
 /* señal */
 function renderSignal() {
   const el = $('#signal'); if (!el) return;
-  const s = net.getStatus(), rtt = net.getRtt();
+  const s = net.getStatus(), rtt = net.getRtt(), link = net.getLinkRtt();
   let q = 0, txt = s === 'on' ? '…' : 'sin señal';
   if (s === 'connecting') txt = 'conectando';
   if (s === 'on' && rtt != null) {
-    q = rtt < 90 ? 4 : rtt < 180 ? 3 : rtt < 400 ? 2 : 1;
+    // las rayitas son la calidad de MI conexión; los ms, lo que tarda ir y volver entre los dos
+    const r = link || rtt;
+    q = r <= 300 ? 4 : r <= 600 ? 3 : r <= 1200 ? 2 : 1;
     txt = `${rtt} ms`;
   }
   el.dataset.q = q;
@@ -658,6 +660,7 @@ function gameCtx() {
 function setGame(g, ev = {}) {
   const had = !!state.game;
   state.game = g;
+  net.setLive(!!g);
   if (!g && had && ev.k === 'quit' && ev.by !== state.you) toast(`${nameOf(ev.by)} terminó la partida`);
   if (g && !had && ev.k === 'start' && state.tab === 'chat' && !wide.matches) setTab('room');
   renderGame(ev);

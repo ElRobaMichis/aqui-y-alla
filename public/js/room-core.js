@@ -186,8 +186,12 @@ export class Core {
       p = { id: rid(5), token, seen: 0, lastSeenAt: now };
       room.players.push(p);
     }
-    p.name = cleanName(m.name);
-    p.look = cleanLook(m.look);
+    const name = cleanName(m.name), look = cleanLook(m.look);
+    // alguien que solo se reconecta (mismo nombre y personaje) no cambia nada que valga una
+    // subida de la sala entera: se guarda con lo siguiente
+    const changed = !p.name || p.name !== name || JSON.stringify(p.look) !== JSON.stringify(look);
+    p.name = name;
+    p.look = look;
     p.conn = conn;
     p.gen = gen;
     p.away = !!m.away;
@@ -207,9 +211,10 @@ export class Core {
       t: 'welcome', you: p.id, room: room.code, seq: room.seq, epoch: room.epoch,
       players: room.players.map(pub), msgs, reset: !incremental,
       game: room.game ?? null, invite: room.invite ?? null,
+      ...(changed ? {} : { ns: 1 }), // ns: este "hola" no provoca guardado (ver net.js, hv)
     });
     this.presence();
-    this.save();
+    this.save(changed ? 'later' : 'lazy');
   }
 
   /** Se cayó una conexión (dejó de estar en el repetidor). */
