@@ -14,7 +14,10 @@
 // - Reconecta de inmediato al volver la red, al volver a la app o al cambiar wifi⇄datos.
 // - Detecta conexiones "zombis" con ping y las reemplaza.
 // - Mensajes de chat en cola (guardada en el teléfono) con id de cliente: se reenvían
-//   hasta que el líder confirma, y nunca se duplican.
+//   hasta que el líder los confirma Y el estado que los incluye queda guardado en el
+//   repetidor (si el líder cambia antes, se le reenvían al nuevo), y nunca se duplican.
+// - Cada turno de líder lleva un número: si dos creen llevar la sala (uno despertó de un
+//   sueño del teléfono), vale el turno más nuevo y el otro suelta el suyo sin pisar nada.
 // - Identidad por dispositivo: el token se crea aquí, antes del primer "hola".
 
 import { Mqtt, EMPTY } from './mqtt.js';
@@ -132,6 +135,7 @@ let core = null;               // room-core, solo si yo soy el líder
 let leading = false, becoming = false, resigning = false;
 let term = null, sv = 0, flushedSv = 0;
 let turn = 0, myTurn = 0;      // número del turno de líder más alto que he visto, y el del mío
+let deadTerm = null;           // turno mío que otro ya relevó: sus guardados pendientes no deben salir
 let sentSv = 0, flushing = null; // versión del estado que ya va en camino al repetidor (y su promesa)
 let retained = null, sSubscribed = false, sSettled = false;
 const snapWaiters = new Set();
@@ -163,6 +167,7 @@ function pubEnc(topic, obj, opts = {}) {
   let ack = null;
   const p = sendQ.then(async () => {
     const bytes = await seal(k, obj, opts.zip);
+    if (opts.when && !opts.when()) throw new Error('ya no aplica'); // cambió algo mientras se cifraba
     if (c.connected) ack = c.publish(topic, bytes, opts);
     else if (opts.qos) throw new Error('sin conexión');
   });
@@ -257,7 +262,12 @@ export function leave() {
     });
     mq = null; // que teardown no la cierre de golpe
   }
-  if (room) localStorage.removeItem(outboxKey(room));
+  if (room) {
+    localStorage.removeItem(outboxKey(room));
+    // ya no soy de esa sala: tampoco me quedo con su copia (si no, al volver a abrir el
+    // código de una sala que ya se borró, renacería de esta copia vieja)
+    localStorage.removeItem(snapKey(room));
+  }
   outbox = [];
   closedOnPurpose = true;
   joinReq = null;
@@ -434,29 +444,30 @@ function publishPresence() {
   return pubEnc(T('c/' + conn), p, { retain: true });
 }
 
+/** Suelto la sala de golpe y sin guardar: otro ya la lleva con un estado que vale más que el
+    mío. (Lo que este turno tuviera a medio subir ya no sale: pisaría lo del nuevo líder.) */
+function abdicate() {
+  if (leading) { leading = false; core = null; clearTimeout(saveTimer); deadTerm = term; }
+  welcomed = false;
+  publishPresence();
+}
+
 function onPresence(id, p) {
   if (!p || p.conn !== id) {
     pres.delete(id);
-    if (id === conn && mq?.connected && !closedOnPurpose) {
-      // alguien borró mi presencia: me creyeron muerto. Dejo de ser líder (el otro ya
-      // tomó el estado) y vuelvo a anunciarme. Si era invitado, el líder también me dio
-      // por desconectado: hay que saludarlo otra vez (lo hace elect()).
-      if (leading) { leading = false; core = null; clearTimeout(saveTimer); }
-      welcomed = false;
-      publishPresence();
-    } else if (leading && core) core.disconnect(id);
+    // alguien borró mi presencia: me creyeron muerto. Dejo de ser líder (el otro ya tomó el
+    // estado) y vuelvo a anunciarme. Si era invitado, el líder también me dio por
+    // desconectado: hay que saludarlo otra vez (lo hace elect()).
+    if (id === conn && mq?.connected && !closedOnPurpose) abdicate();
+    else if (leading && core) core.disconnect(id);
   } else {
     if (id === conn) return; // eco de mi propia presencia
     p.rx = Date.now(); // la vigencia se mide con mi reloj, no con el del otro teléfono
     pres.set(id, p);
     if (p.lt > turn) turn = p.lt;
-    if (leading && p.lead && p.lt > myTurn) {
-      // otro tomó la sala después que yo (típico: el teléfono durmió mi página, me dieron por
-      // ausente y desperté creyéndome líder). Su estado es el bueno: suelto el mío sin guardarlo.
-      leading = false; core = null; clearTimeout(saveTimer);
-      welcomed = false;
-      publishPresence();
-    }
+    // otro tomó la sala después que yo (típico: el teléfono durmió mi página, me dieron por
+    // ausente y desperté creyéndome líder). Su estado es el bueno.
+    if (leading && p.lead && p.lt > myTurn) abdicate();
   }
   elect();
 }
@@ -525,7 +536,7 @@ async function stepDown(flush) {
   if (flush) {
     try { await Promise.race([flushRemote(), new Promise((r) => setTimeout(r, 2500))]); } catch {}
     if (mq !== c) return; // se cayó la conexión mientras tanto: ya se limpió todo y esto es de otra
-  }
+  } else deadTerm = term; // el otro ya la lleva: lo que yo tuviera a medio subir no debe pisar lo suyo
   leading = false; resigning = false; core = null;
   welcomed = false; leader = null;
   await publishPresence().catch(() => {});
@@ -553,9 +564,12 @@ async function freshestSnapshot(want, again) {
       snapWaiters.add(check);
       t = setTimeout(done, again ? 2500 : want ? 3000 : SETTLE + 600);
     });
-    if (mq !== c) return null;
-    sSettled = true;
   }
+  // lo que ya llegó por la red pero sigue en fila para descifrarse también cuenta (al
+  // despertar la página, los relojes vencidos se adelantan a los mensajes atrasados)
+  await recvQ;
+  if (mq !== c) return null;
+  sSettled = true;
   const local = loadLocalSnap(keys.code);
   let snap = retained;
   // la copia local gana solo si es del mismo turno de líder y más nueva (el repetidor
@@ -578,9 +592,10 @@ async function becomeLeader() {
     let snap = await freshestSnapshot(want);
     if (mq !== c || !c.connected) return;
     if (computeLeader() !== conn) return;
-    if (!snap && !joinReq.create) {
-      // no apareció ningún estado. Antes de dar la sala por inexistente (o de empezar una
-      // vacía encima de la que quizá sí existe) se pide otra vez y se espera con calma: hay
+    if (!retained && !joinReq.create) {
+      // el repetidor no mandó ningún estado. Antes de dar la sala por inexistente, de empezar
+      // una vacía encima de la que quizá sí existe, o de fiarme de mi copia local (que es
+      // vieja si otro llevó la sala después), se pide otra vez y se espera con calma: hay
       // repetidores que mandan lo retenido un buen rato después de confirmar la suscripción
       snap = await freshestSnapshot(want, true);
       if (mq !== c || !c.connected) return;
@@ -620,7 +635,8 @@ const coreOut = {
     // fv: hasta qué versión está guardado el estado en el repetidor. hv: la versión que incluye
     // (o va a incluir) lo que confirma este mensaje. Con eso el otro sabe cuándo su mensaje
     // de chat ya no depende de que este teléfono siga vivo.
-    const e = { k: 'down', from: conn, m: o, fv: flushedSv };
+    const e = { k: 'down', from: conn, m: o };
+    if (o.t !== 'g:aim') e.fv = flushedSv; // (la puntería va muchas veces por segundo: sin extras)
     if (o.t === 'chat') e.hv = latest && latest.seq >= o.m.id ? sv : sv + 1;
     else if (o.t === 'welcome') e.hv = sv + 1; // tras cada "hola" viene un guardado
     pubEnc(T('to/' + to), e);
@@ -656,7 +672,7 @@ function flushRemote() {
   if (s.sv <= sentSv && flushing) return flushing; // esa versión ya va en camino
   const c = mq;
   sentSv = s.sv;
-  const p = pubEnc(T('s'), s, { retain: true, qos: 1, zip: true }).then(() => {
+  const p = pubEnc(T('s'), s, { retain: true, qos: 1, zip: true, when: () => s.term !== deadTerm }).then(() => {
     if (mq !== c || s.term !== term) return; // confirmación de otra conexión o de un turno anterior
     if (s.sv > flushedSv) flushedSv = s.sv;
     // (si ya estoy entregando el turno no cuenta: el que sigue pudo tomar un estado anterior
@@ -724,7 +740,7 @@ function fail(code) {
 /** Llega un mensaje del árbitro. `e`: el sobre en que venía, si el árbitro es otro. */
 function handleDown(m, e) {
   if (!m || typeof m.t !== 'string') return;
-  settleNow(e);
+  if (m.t !== 'welcome') settleNow(e); // (una bienvenida primero vuelve a confirmar lo pendiente)
   if (m.t === 'pong') {
     if (pingAwait) { setRtt(Math.round(performance.now() - pingAwait)); pingAwait = 0; leaderMiss = 0; }
     return;
@@ -877,11 +893,13 @@ window.addEventListener('focus', kick);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) kick();
   if (status === 'on') up({ t: 'away', on: document.hidden });
-  if (!mq?.connected || !ready) return;
+  if (!mq?.connected) return;
   // me voy a segundo plano siendo líder: el estado y el aviso salen ya, uno tras otro y sin
   // esperar confirmaciones (el teléfono puede dormir la página en cualquier momento). Si hay
   // alguien visible, elect() entrega el turno en este mismo instante.
   if (document.hidden && leading) flushRemote().catch(() => {});
+  // (la presencia se publica aunque la conexión esté recién abierta y aún no elija líder: si
+  // no, el otro se queda con un "visible" o "en segundo plano" que ya no es cierto)
   publishPresence();
   elect();
 });
