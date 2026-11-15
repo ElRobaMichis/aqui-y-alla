@@ -58,7 +58,7 @@ export class Mqtt {
   }
 
   nextId() { this.ids = (this.ids % 65535) + 1; return this.ids; }
-  waitAck(id, ms = 8000) {
+  waitAck(id, ms = 20_000) {
     return new Promise((res, rej) => {
       const t = setTimeout(() => { this.acks.delete(id); rej(new Error('sin respuesta')); }, ms);
       this.acks.set(id, (err) => { clearTimeout(t); if (err) rej(err); else res(); });

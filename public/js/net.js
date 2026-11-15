@@ -123,6 +123,11 @@ let attempt = 0, connGen = 0;
 let brokerIdx = 0, brokerFails = 0;
 let retryTimer = null, openTimer = null, pingTimer = null, settleTimer = null, helloTimer = null, presTimer = null, saveTimer = null;
 let rtt = null;
+// latencia al repetidor (promedio móvil, ms). En 3G o con una rayita todo tarda más, así que los
+// plazos de espera crecen con ella en vez de cortar conexiones que solo van lentas
+let mqRtt = 0;
+const slow = (base, k) => Math.min(base + k * mqRtt, 30_000);
+function noteMqRtt(ms) { ms = Math.min(ms, 8000); mqRtt = mqRtt ? mqRtt * 0.7 + ms * 0.3 : ms; } // (una página dormida no cuenta como red lenta)
 let lastId = 0, lastC = null;  // último mensaje de chat recibido: id y cid (solo en memoria)
 let outbox = [];               // [{ cid, x, ts, sent, held? }]  held: el árbitro ya lo aceptó, falta que se guarde (ver ackChats)
 let closedOnPurpose = false;
@@ -342,7 +347,7 @@ async function connect() {
   mq = c;
 
   // en redes lentas el handshake tarda: el límite crece con cada intento
-  const openTimeout = Math.min(6000 + attempt * 2500, 20000);
+  const openTimeout = Math.min(10_000 + attempt * 4000, 30_000);
   const openAt = Date.now();
   openTimer = setTimeout(() => {
     if (c.connected) return;
@@ -356,6 +361,8 @@ async function connect() {
 
   c.onconnect = async () => {
     clearTimeout(openTimer);
+    // abrir (DNS + TLS + WebSocket + CONNECT) son unas 4 idas y vueltas: primera estimación
+    noteMqRtt((Date.now() - openAt) / 4);
     brokerFails = 0;
     mqLastPong = Date.now();
     // si la conexión anterior de este dispositivo murió sin avisar, borrar su presencia
@@ -379,7 +386,7 @@ async function connect() {
   };
   c.onpong = () => {
     mqLastPong = Date.now();
-    if (mqAwait) { if (leading) setRtt(Math.round(performance.now() - mqAwait)); mqAwait = 0; }
+    if (mqAwait) { const ms = performance.now() - mqAwait; noteMqRtt(ms); if (leading) setRtt(Math.round(ms)); mqAwait = 0; }
   };
   c.onmessage = (topic, payload) => {
     // descifrar es asíncrono: encadenado para no cambiar el orden de llegada
@@ -631,7 +638,10 @@ async function becomeLeader() {
 /* el room-core del líder habla por aquí */
 const coreOut = {
   send(to, o) {
-    if (to === conn) { queueMicrotask(() => handleDown(o)); return; }
+    // copia en el momento: el core sigue mutando su estado (p. ej. room.game en cada jugada) y la
+    // interfaz del líder necesita el "antes" intacto para animar el tiro del otro, igual que el
+    // otro teléfono, que recibe una copia por la red
+    if (to === conn) { const c = structuredClone(o); queueMicrotask(() => handleDown(c)); return; }
     // fv: hasta qué versión está guardado el estado en el repetidor. hv: la versión que incluye
     // (o va a incluir) lo que confirma este mensaje. Con eso el otro sabe cuándo su mensaje
     // de chat ya no depende de que este teléfono siga vivo.
@@ -724,7 +734,7 @@ function sendHello() {
     // el líder no contesta (3 intentos) pero el repetidor sí: lo damos por muerto y borramos su presencia
     if (++helloTries >= 3 && leader && Date.now() - mqLastPong < 25_000) { evict(leader); return; }
     sendHello();
-  }, HELLO_RETRY);
+  }, slow(HELLO_RETRY, 4));
 }
 
 function evict(id) {
@@ -841,11 +851,11 @@ function ping(force) {
   if (!mq?.connected) return;
   const now = performance.now();
   // al repetidor: siempre (mantiene viva la conexión), es un paquete de 2 bytes
-  if (mqAwait && now - mqAwait > PONG_GRACE) { retry(); return; }
+  if (mqAwait && now - mqAwait > slow(PONG_GRACE, 4)) { retry(); return; }
   if (!mqAwait) { mqAwait = now; mq.ping(); }
   // al líder: solo con la app visible (latencia real entre los dos y detectar si se murió)
   if (leading || !welcomed || !leader || (document.hidden && !force)) return;
-  if (pingAwait && now - pingAwait > PONG_GRACE) {
+  if (pingAwait && now - pingAwait > slow(PONG_GRACE, 8)) {
     pingAwait = 0;
     if (++leaderMiss >= 2 && Date.now() - mqLastPong < 25_000) evict(leader);
   }
@@ -886,7 +896,7 @@ function doKick() {
   mqAwait = performance.now();
   c.ping();
   const probe = mqAwait;
-  setTimeout(() => { if (mq === c && mqAwait === probe) retry(); }, 2500);
+  setTimeout(() => { if (mq === c && mqAwait === probe) retry(); }, slow(2500, 3));
 }
 window.addEventListener('online', kick);
 window.addEventListener('focus', kick);

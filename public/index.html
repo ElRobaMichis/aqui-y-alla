@@ -8,13 +8,23 @@
   <title>aquí y allá</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
+  <!-- todo lo que se necesita al abrir se pide de una vez (no en escalera): con mala señal
+       cada ida y vuelta cuesta uno o dos segundos -->
+  <link rel="modulepreload" href="js/app.js">
   <link rel="modulepreload" href="js/net.js">
+  <link rel="modulepreload" href="js/mqtt.js">
+  <link rel="modulepreload" href="js/room-core.js">
+  <link rel="modulepreload" href="js/games/gato-rules.js">
   <link rel="modulepreload" href="js/audio.js">
   <link rel="modulepreload" href="js/critters.js">
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
-  <div id="app" aria-live="polite"></div>
+  <div id="app" aria-live="polite"><p class="booting" style="text-align:center;margin-top:30vh;font:600 1rem system-ui,sans-serif;opacity:.7">cargando…</p></div>
+  <script>
+    // con muy mala señal, que se note que sí está cargando (app.js reemplaza esto al arrancar)
+    setTimeout(function () { var b = document.querySelector('.booting'); if (b) b.textContent = 'la señal está lenta… ya casi'; }, 8000);
+  </script>
   <div id="fx" aria-hidden="true"></div>
   <div id="toasts" aria-live="polite"></div>
 

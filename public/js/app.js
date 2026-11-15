@@ -949,3 +949,13 @@ fitViewport();
   }
   renderLobby(invite && invite.length === 6 ? invite : null);
 })();
+
+// guardar la app en el teléfono (sw.js) cuando ya cargó todo, para no competir por la señal
+if ('serviceWorker' in navigator && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+  addEventListener('load', () => setTimeout(() => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // si esta página ya salió de la caché, cargar de una vez los juegos (también de la caché):
+    // así, si mientras juegan se publica otra versión, nunca se mezclan archivos de dos versiones
+    if (navigator.serviceWorker.controller) for (const load of Object.values(GAME_MODULES)) load().catch(() => {});
+  }, 1500));
+}
