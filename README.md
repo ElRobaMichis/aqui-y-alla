@@ -23,6 +23,14 @@ respaldo): cada navegador se conecta por WebSocket y se mandan mensajes por "tem
 - La presencia ("en línea") usa el "testamento" de MQTT: si un teléfono desaparece sin
   avisar, el repetidor lo anuncia solo.
 
+- **Conexión directa en las partidas** (`rtc.js`, WebRTC): con un juego abierto y los dos
+  a la vista, los teléfonos intentan hablarse directo (sin pasar por Europa): la puntería y
+  los pings van solo por ahí, y lo importante (jugadas, chat) va por los dos caminos a la vez
+  con número de secuencia, así que si lo directo se corta no se pierde ni se repite nada. Se
+  presentan por el repetidor (cifrado) con servidores STUN públicos; si la red no lo permite
+  (algunas celulares), todo sigue por el repetidor. ⚡ junto a los ms = conexión directa.
+  En el menú, "Probar mi conexión" dice si la red del teléfono la permite.
+
 Los repetidores públicos son gratuitos y sin garantías. Si uno no responde, la app prueba el
 siguiente; los dos teléfonos usan el mismo orden.
 
@@ -85,6 +93,7 @@ public/css/style.css    estilo papelería: papel, timbres, tinta
 public/js/app.js        interfaz: lobby, sala, chat, reacciones, juegos
 public/js/net.js        conexión al repetidor, cifrado, elección de líder, reintentos
 public/js/mqtt.js       cliente MQTT mínimo (~3 KB)
+public/js/rtc.js        conexión directa entre teléfonos (WebRTC) y prueba de red
 public/js/room-core.js  lógica de la sala (la corre el líder)
 public/js/audio.js      música generativa lo-fi y efectos, todo sintetizado
 public/js/critters.js   personajes (ajolote, gato, conejo, osito, rana)

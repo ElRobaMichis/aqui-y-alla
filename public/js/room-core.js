@@ -3,7 +3,7 @@
 // le manda sus mensajes por el repetidor y el líder contesta igual que lo hacía el servidor.
 // Es una máquina de estados pura: no sabe nada de red ni de almacenamiento; para eso
 // recibe `out` = { send(conn, msg), kick(conn, code), save(level), empty() }.
-// level: 'soon' (jugadas), 'later' (lo normal), 'lazy' ("visto": puede esperar).
+// level: 'soon' (chat, jugadas, alguien nuevo), 'later' (lo demás), 'lazy' ("visto": puede esperar).
 
 import * as gato from './games/gato-rules.js';
 
@@ -115,7 +115,7 @@ export class Core {
         room.msgs.push(msg);
         if (room.msgs.length > MAX_MSGS) room.msgs.splice(0, room.msgs.length - MAX_MSGS);
         this.bcast({ t: 'chat', m: msg });
-        this.save();
+        this.save('soon');
         return;
       }
       case 'typing':
@@ -214,7 +214,7 @@ export class Core {
       ...(changed ? {} : { ns: 1 }), // ns: este "hola" no provoca guardado (ver net.js, hv)
     });
     this.presence();
-    this.save(changed ? 'later' : 'lazy');
+    this.save(changed ? 'soon' : 'lazy');
   }
 
   /** Se cayó una conexión (dejó de estar en el repetidor). */
@@ -323,7 +323,7 @@ export class Core {
       case 'g:quit':
         room.game = null;
         this.bcast({ t: 'g:state', g: null, ev: { k: 'quit', by: me.id } });
-        this.save();
+        this.save('soon');
         return;
     }
   }

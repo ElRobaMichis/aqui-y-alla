@@ -22,6 +22,7 @@
 
 import { Mqtt, EMPTY } from './mqtt.js';
 import { Core, newRoom, loadGames } from './room-core.js';
+import { Peer, supported as rtcSupported } from './rtc.js';
 
 // ?as=b separa el almacenamiento: útil para probar a dos personas en el mismo navegador
 const AS = new URLSearchParams(location.search).get('as')?.replace(/\W/g, '').slice(0, 8);
@@ -55,8 +56,9 @@ const HELLO_RETRY = 3500;
 const HELLO_FAST = 600;        // margen para un "hola" que se cruzó con el anuncio del líder
 // cada guardado sube la sala entera (~6 KB) al repetidor: según qué cambió, se espera más o menos
 // para juntar varios cambios en una sola subida
-const SAVE_SOON = 2000;          // jugadas e invitaciones: que no se pierdan si este teléfono se apaga
-const SAVE_LATER = 8000;        // chat, entradas y salidas (los mensajes quedan protegidos hasta guardarse)
+const SAVE_SOON = 600;         // chat, jugadas y salas/personas nuevas: que no se pierdan si este teléfono se apaga
+const SAVE_LATER = 2500;        // lo demás (invitaciones, salidas, perfil): puede juntarse
+const SAVE_LAZY = 15_000;       // "visto" y reconexiones sin cambios: se juntan con lo que venga, pero suben sí o sí
 const PRES_REFRESH = 110_000;   // la presencia se renueva; si se queda vieja, no cuenta
 const PRES_STALE = 330_000;
 export const CODE_LEN = 6;
@@ -160,9 +162,17 @@ export const getRtt = () => rtt;
 export const getLinkRtt = () => (mqRtt ? Math.round(mqRtt) : null);
 let liveGame = false, lastActive = 0, lastPingAt = 0;
 /** La app avisa si hay partida: entonces los pings van seguidos (detectar cortes rápido). */
-export function setLive(on) { liveGame = !!on; }
+export function setLive(on) {
+  liveGame = !!on;
+  clearTimeout(rtcIdleT);
+  if (liveGame) maybeDirect();
+  // sin partida la conexión directa no hace falta (y mantenerla gasta): se cierra al rato
+  else if (peer) rtcIdleT = setTimeout(() => { if (!liveGame) closePeer(true); }, 45_000);
+}
+/** ¿Hay conexión directa entre los dos teléfonos ahora mismo? */
+export const isDirect = () => !!peer?.usable;
 /** La conexión tiene cosas atoradas por salir (señal mala): mejor no mandar lo que no es urgente. */
-export const congested = () => (mq?.ws?.bufferedAmount ?? 0) > 2048;
+export const congested = () => (peer?.usable ? peer.buffered > 8192 : (mq?.ws?.bufferedAmount ?? 0) > 2048);
 export const getSession = () => session;
 /** Lo que todavía no confirma el árbitro (lo que ya aceptó el mío no se muestra como pendiente). */
 export const pending = () => outbox.filter((o) => o.held == null).map(({ cid, x, ts }) => ({ cid, x, ts }));
@@ -329,6 +339,7 @@ function teardown(graceful) {
   sentSv = 0; flushing = null;
   mqAwait = pingAwait = leaderMiss = 0; // los pings pendientes eran de la conexión anterior
   probing = false; clearTimeout(probeShow);
+  closePeer(); dropLinks();
   for (const w of snapWaiters) w();
   snapWaiters.clear();
   if (mq) {
@@ -419,7 +430,7 @@ async function connect() {
     mqLastPong = Date.now();
     // el sondeo al volver contestó: la conexión seguía viva
     if (probing) { probing = false; clearTimeout(probeShow); if (status === 'connecting' && welcomed) setStatus('on'); }
-    if (mqAwait) { const ms = performance.now() - mqAwait; noteMqRtt(ms); if (leading) setRtt(Math.round(ms)); mqAwait = 0; }
+    if (mqAwait) { const ms = performance.now() - mqAwait; noteMqRtt(ms); if (leading && Date.now() - followerRttAt > 30_000) setRtt(Math.round(ms)); mqAwait = 0; }
   };
   c.onmessage = (topic, payload) => {
     // descifrar es asíncrono: encadenado para no cambiar el orden de llegada
@@ -451,19 +462,7 @@ async function inbound(c, topic, payload) {
   } else if (sub === 'to/' + conn) {
     const e = await unseal(keys, payload);
     if (!e || mq !== c) return;
-    if (e.k === 'up') {
-      if (!leading || resigning || !core) return;
-      if (e.m?.t === 'hello' || core.playerOf(e.from)) { core.message(e.from, e.m); return; }
-      // se cree dentro de la sala, pero este árbitro no lo conoce (el turno de líder cambió
-      // sin que se enterara): que salude otra vez en lugar de hablarle a la pared
-      const t = Date.now();
-      if (e.from !== rehelloTo || t - rehelloAt > 1000) {
-        rehelloTo = e.from; rehelloAt = t;
-        pubEnc(T('to/' + e.from), { k: 'down', from: conn, m: { t: 'rehello' } });
-      }
-    } else if (e.k === 'down') {
-      if (e.from === leader || e.m?.t === 'err') handleDown(e.m, e);
-    } else if (e.k === 'kick') onKick(e.code);
+    onEnvelope(e, 'mq');
   }
 }
 
@@ -574,6 +573,7 @@ function elect() {
 
 async function stepDown(flush) {
   if (!leading || resigning) return;
+  closePeer(true); dropLinks();
   const c = mq;
   resigning = true;
   clearTimeout(saveTimer); saveTimer = null;
@@ -624,6 +624,7 @@ async function freshestSnapshot(want, again) {
 
 async function becomeLeader() {
   if (becoming || leading) return;
+  closePeer(true); dropLinks();
   becoming = true;
   const c = mq;
   try {
@@ -666,7 +667,7 @@ async function becomeLeader() {
     leader = conn;
     welcomed = false; helloTries = 0;
     sendHello();
-    if (!snap) save(); // que la sala exista en el repetidor desde ya
+    if (!snap) save('soon'); // que la sala exista en el repetidor desde ya
   } finally {
     becoming = false;
     if (mq === c && c.connected && !leading) elect();
@@ -687,6 +688,14 @@ const coreOut = {
     if (o.t !== 'g:aim') e.fv = flushedSv; // (la puntería va muchas veces por segundo: sin extras)
     if (o.t === 'chat') e.hv = latest && latest.seq >= o.m.id ? sv : sv + 1;
     else if (o.t === 'welcome') e.hv = o.ns ? sv : sv + 1; // tras un "hola" viene un guardado (salvo ns)
+    if (o.t === 'pong' || o.t === 'g:aim') {
+      // el pong regresa por donde llegó el ping (así mide el camino que se está usando)
+      const viaDc = o.t === 'g:aim' || pingVia.get(to) === 'dc';
+      if (viaDc && peerUsable(to) && peer.sendLossy(e)) return;
+    } else if (!UNSEQ.has(o.t)) {
+      const k = links.get(to);
+      if (k) { e.lk = k.lk; e.q = ++k.tx; if (peerUsable(to)) peer.send(e); }
+    }
     // la bienvenida (historial) y el estado del juego pesan: comprimidos ocupan menos de la mitad
     pubEnc(T('to/' + to), e, { zip: o.t === 'welcome' || o.t === 'g:state' });
   },
@@ -706,12 +715,13 @@ const coreOut = {
 };
 
 let latest = null;
-/** level: 'soon' | 'later' | 'lazy' (lazy = "visto": se sube con lo siguiente o al salir) */
+/** level: 'soon' | 'later' | 'lazy' (lazy = "visto": se sube con lo siguiente, o a los 15 s; nunca "nunca":
+ *  hay mensajes cuya confirmación espera a que esa versión quede guardada) */
 function save(level = 'later') {
   if (!core) return;
   latest = { ...core.snapshot(), sv: ++sv, term, lt: myTurn };
   try { localStorage.setItem(snapKey(keys.code), JSON.stringify(latest)); } catch {}
-  if (level !== 'lazy') scheduleFlush(level === 'soon' ? SAVE_SOON : SAVE_LATER);
+  scheduleFlush(level === 'soon' ? SAVE_SOON : level === 'lazy' ? SAVE_LAZY : SAVE_LATER);
 }
 let saveDue = 0;
 /** Sube la sala en `ms`, salvo que ya haya una subida programada antes (esa se lleva lo último). */
@@ -752,12 +762,190 @@ function flushRemote() {
 /* ───────────── mensajes ───────────── */
 
 /** Manda un mensaje "al servidor": al room-core local si soy líder, o al líder por el repetidor. */
+/* ───────────── enlace con números de secuencia ─────────────
+   Con conexión directa, lo confiable viaja por los DOS caminos (directo y repetidor) y el que
+   llega primero gana: así un corte del camino directo no pierde nada ni hay que reenviar. Para
+   eso cada mensaje lleva su enlace (lk: lo elige el invitado en cada ronda de "hola") y su
+   número (q); el que recibe lo procesa una sola vez y en orden. Lo que se reemplaza solo
+   (puntería, pings) va sin número y solo por el camino más rápido. */
+const UNSEQ = new Set(['hello', 'ping', 'pong', 'g:aim', 'rehello', 'err']);
+const P2P_OFF = new URLSearchParams(location.search).get('p2p') === '0';
+const newLink = (lk, to) => ({ lk, to, tx: 0, rx: 0, hold: new Map(), gapT: null, done: false });
+let fl = null;               // (invitado) mi enlace con el líder
+const links = new Map();     // (líder) conn del invitado -> enlace
+const pingVia = new Map();   // (líder) por dónde llegó el último ping de cada quien
+let myPingVia = 'mq';        // (invitado) por dónde salió mi último ping
+let followerRttAt = 0;       // (líder) cuándo me dijo el invitado su latencia
+
+/** Entrega en orden y una sola vez; si falta uno por mucho rato, onGap pide empezar de nuevo. */
+function accept(k, e, deliver, onGap) {
+  if (e.q <= k.rx) return; // ya llegó por el otro camino
+  if (e.q !== k.rx + 1) {
+    k.hold.set(e.q, e);
+    if (!k.gapT) k.gapT = setTimeout(() => { k.gapT = null; if (k.hold.size) onGap(); }, 4000 + 4 * mqRtt);
+    return;
+  }
+  k.rx = e.q; deliver(e);
+  for (let n; (n = k.hold.get(k.rx + 1)); ) { k.hold.delete(k.rx + 1); k.rx++; deliver(n); }
+  if (!k.hold.size) { clearTimeout(k.gapT); k.gapT = null; }
+}
+function dropLinks() {
+  if (fl) clearTimeout(fl.gapT);
+  for (const k of links.values()) clearTimeout(k.gapT);
+  fl = null; links.clear(); pingVia.clear();
+}
+/** Enlace para el "hola": el mismo en los reintentos; uno nuevo tras una bienvenida o con otro líder. */
+function helloLink() {
+  if (!fl || fl.to !== leader || fl.done) {
+    if (fl) clearTimeout(fl.gapT);
+    fl = newLink(randomId(4), leader);
+    closePeer(); // la conexión directa era del enlace anterior
+  }
+  return fl.lk;
+}
+
+function onEnvelope(e, via) {
+  if (e.k === 'up') onUp(e, via);
+  else if (e.k === 'down') onDown(e);
+  else if (e.k === 'kick') { if (via === 'mq') onKick(e.code); }
+  else if (e.k === 'rtc') onRtc(e);
+}
+/* (líder) mensaje de un invitado */
+function onUp(e, via) {
+  if (!leading || resigning || !core) return;
+  const m = e.m;
+  if (m?.t === 'ping') {
+    pingVia.set(e.from, via);
+    // la latencia que mide el invitado (ida y vuelta entre los dos) es la que también enseño yo
+    if (Number.isFinite(m.r) && m.r > 0) { followerRttAt = Date.now(); setRtt(m.r); }
+  }
+  if (m?.t === 'hello') {
+    if (e.lk && links.get(e.from)?.lk !== e.lk) {
+      clearTimeout(links.get(e.from)?.gapT);
+      links.set(e.from, newLink(e.lk, e.from));
+      if (peerWith === e.from) closePeer();
+    }
+    core.message(e.from, m);
+    return;
+  }
+  if (!core.playerOf(e.from)) {
+    // se cree dentro de la sala, pero este árbitro no lo conoce (el turno de líder cambió
+    // sin que se enterara): que salude otra vez en lugar de hablarle a la pared
+    const t = Date.now();
+    if (e.from !== rehelloTo || t - rehelloAt > 1000) {
+      rehelloTo = e.from; rehelloAt = t;
+      pubEnc(T('to/' + e.from), { k: 'down', from: conn, m: { t: 'rehello' } });
+    }
+    return;
+  }
+  if (!Number.isInteger(e.q)) { core.message(e.from, m); return; }
+  const k = links.get(e.from);
+  if (!k || k.lk !== e.lk) return; // de un enlace anterior: el "hola" nuevo ya lo reemplazó
+  accept(k, e, (x) => { if (leading && core) core.message(x.from, x.m); }, () => {
+    rehelloTo = e.from; rehelloAt = Date.now();
+    pubEnc(T('to/' + e.from), { k: 'down', from: conn, m: { t: 'rehello' } });
+  });
+}
+/* (invitado) mensaje del líder */
+function onDown(e) {
+  if (!(e.from === leader || e.m?.t === 'err')) return;
+  if (!Number.isInteger(e.q)) { handleDown(e.m, e); return; } // sin número: pong, puntería, avisos (o un líder con la versión anterior)
+  if (!fl || e.lk !== fl.lk || fl.to !== e.from) return;      // de un enlace anterior: la bienvenida nueva ya lo cubre
+  // la bienvenida trae todo: lo que faltara antes de ella ya no importa
+  if (e.m?.t === 'welcome' && e.q > fl.rx + 1) { for (const q of fl.hold.keys()) if (q < e.q) fl.hold.delete(q); fl.rx = e.q - 1; }
+  accept(fl, e, (x) => handleDown(x.m, x), () => { fl.done = true; welcomed = false; sendHello(); });
+}
+
+/* ───────────── conexión directa ───────────── */
+let peer = null, peerWith = null, peerSid = null;
+let rtcFails = 0, rtcNext = 0, rtcIdleT = null;
+// (invitado) con conexión directa se sondea seguido: si el camino directo deja de contestar,
+// la puntería se iría al vacío hasta notarlo. Un ping directo pesa ~120 bytes.
+let dcPingI = null, dcPingT = null;
+const peerUsable = (to) => !!peer && peerWith === to && peer.usable;
+
+function closePeer(bye) {
+  if (!peer) return;
+  const p = peer, w = peerWith, sid = peerSid;
+  peer = null; peerWith = peerSid = null;
+  clearInterval(dcPingI); clearTimeout(dcPingT); dcPingI = dcPingT = null;
+  if (bye && w && mq?.connected) pubEnc(T('to/' + w), { k: 'rtc', from: conn, sid, t: 'bye' });
+  p.close();
+  emit('direct', false);
+}
+function makePeer(initiator, withConn, sid) {
+  const p = new Peer({
+    initiator,
+    signal: (msg) => { if (peer === p) pubEnc(T('to/' + withConn), { k: 'rtc', from: conn, sid, ...msg }, { zip: msg.t !== 'cand' }); },
+    // lo que llega directo viene de quien es (DTLS con la huella que viajó cifrada)
+    onmessage: (obj) => { if (peer === p && obj && typeof obj === 'object') onEnvelope({ ...obj, from: withConn }, 'dc'); },
+    onopen: () => {
+      if (peer !== p) return;
+      rtcFails = 0; emit('direct', true);
+      if (!leading) {
+        ping(true);
+        // (solo al otro teléfono, por el camino directo: el repetidor ya tiene su propio ping)
+        clearInterval(dcPingI);
+        dcPingI = setInterval(() => {
+          if (!pingAwait && welcomed && !leading && peer?.usable) { pingAwait = performance.now(); up({ t: 'ping', n: ++pingN & 0xffff, r: rtt ?? undefined }); }
+        }, 4000);
+      }
+    },
+    ondegraded: () => { if (peer === p) emit('direct', p.usable); },
+    onclose: (failed) => {
+      if (peer === p) { peer = null; peerWith = peerSid = null; emit('direct', false); }
+      clearInterval(dcPingI); clearTimeout(dcPingT); dcPingI = dcPingT = null;
+      // no se pudo (red que no lo permite): no insistir enseguida
+      if (failed && initiator) { rtcNext = Date.now() + [60_000, 300_000, 1_800_000][Math.min(rtcFails, 2)]; rtcFails++; }
+    },
+  });
+  peer = p; peerWith = withConn; peerSid = sid;
+}
+/** (invitado) intenta la conexión directa si vale la pena: partida en curso y los dos a la vista. */
+function maybeDirect() {
+  if (P2P_OFF || !rtcSupported() || peer || leading || !welcomed || !liveGame || document.hidden) return;
+  if (!leader || !pres.get(leader)?.vis || Date.now() < rtcNext || status !== 'on' || !mq?.connected) return;
+  makePeer(true, leader, randomId(6));
+}
+function onRtc(e) {
+  if (P2P_OFF || !rtcSupported()) return;
+  if (e.t === 'offer') {
+    if (!leading || !core?.playerOf(e.from) || document.hidden || typeof e.sdp !== 'string') return;
+    closePeer();
+    makePeer(false, e.from, e.sid);
+    peer.handle(e);
+    return;
+  }
+  if (!peer || peerWith !== e.from || peerSid !== e.sid) return;
+  if (e.t === 'bye') { closePeer(); return; }
+  peer.handle(e);
+}
+
 function up(m) {
   if (!mq?.connected) return false;
   if (m.t !== 'ping' && m.t !== 'away') lastActive = Date.now();
   if (leading && !resigning && core) { core.message(conn, m); return true; }
   if (!leader || leader === conn) return false;
-  pubEnc(T('to/' + leader), { k: 'up', from: conn, m });
+  const e = { k: 'up', from: conn, m };
+  const direct = peerUsable(leader);
+  if (m.t === 'g:aim' || m.t === 'ping') {
+    // lo que se reemplaza solo: por el camino directo y nada más (si hay)
+    myPingVia = 'mq';
+    if (direct && peer.sendLossy(e)) {
+      if (m.t === 'ping') {
+        myPingVia = 'dc';
+        // sin respuesta directa en 2.5 s: ese camino murió, de vuelta al repetidor
+        clearTimeout(dcPingT);
+        dcPingT = setTimeout(() => { if (pingAwait && myPingVia === 'dc') { pingAwait = 0; closePeer(true); } }, 2500);
+      }
+      return true;
+    }
+  } else if (m.t === 'hello') e.lk = helloLink();
+  else if (fl && fl.to === leader && welcomed && !UNSEQ.has(m.t)) {
+    e.lk = fl.lk; e.q = ++fl.tx;
+    if (direct) peer.send(e);
+  }
+  pubEnc(T('to/' + leader), e);
   return true;
 }
 
@@ -806,7 +994,7 @@ function handleDown(m, e) {
   }
   if (m.t === 'rehello') {
     // el líder no me tiene registrado: saludar de nuevo (sin repetir un "hola" recién mandado)
-    if (!leading && (welcomed || Date.now() - helloAt > 1000)) { welcomed = false; sendHello(); }
+    if (!leading && (welcomed || Date.now() - helloAt > 1000)) { if (fl) fl.done = true; welcomed = false; sendHello(); }
     return;
   }
   if (m.t === 'welcome') {
@@ -831,9 +1019,10 @@ function handleDown(m, e) {
     ackChats((cid) => mine.has(cid), e?.hv);
     settleNow(e);
     saveOutbox();
+    if (fl) fl.done = true;
     emit('welcome', m);
     resendOutbox(true);
-    if (!leading) ping(true);
+    if (!leading) { ping(true); maybeDirect(); }
     return;
   }
   if (m.t === 'chat') {
@@ -892,6 +1081,7 @@ function resendOutbox(all) {
 
 function tick() {
   ping();
+  maybeDirect();
   resendOutbox(false);
   elect(); // por si alguna presencia caducó
 }
@@ -907,11 +1097,13 @@ function ping(force) {
   if (!mqAwait) { mqAwait = now; mq.ping(); }
   // al líder: solo con la app visible (latencia real entre los dos y detectar si se murió)
   if (leading || !welcomed || !leader || (document.hidden && !force)) return;
-  if (pingAwait && now - pingAwait > slow(PONG_GRACE, 8)) {
+  if (pingAwait && now - pingAwait > (myPingVia === 'dc' ? 3000 : slow(PONG_GRACE, 8))) {
     pingAwait = 0;
-    if (++leaderMiss >= 2 && Date.now() - mqLastPong < 25_000) evict(leader);
+    // el camino directo dejó de contestar: de vuelta al repetidor (no es que el líder se cayera)
+    if (myPingVia === 'dc') closePeer(true);
+    else if (++leaderMiss >= 2 && Date.now() - mqLastPong < 25_000) evict(leader);
   }
-  if (!pingAwait) { pingAwait = now; up({ t: 'ping', n: ++pingN & 0xffff }); }
+  if (!pingAwait) { pingAwait = now; up({ t: 'ping', n: ++pingN & 0xffff, r: rtt ?? undefined }); }
 }
 
 function retry() {
@@ -964,7 +1156,7 @@ function doKick() {
 window.addEventListener('online', kick);
 window.addEventListener('focus', kick);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) hiddenAt = Date.now();
+  if (document.hidden) { hiddenAt = Date.now(); closePeer(true); }
   else {
     if (hiddenAt) { awayFor = Date.now() - hiddenAt; resumedAt = Date.now(); hiddenAt = 0; }
     kick();
@@ -983,10 +1175,18 @@ document.addEventListener('visibilitychange', () => {
 // al cerrar o recargar: lo último ya está en la copia local; el repetidor borra mi presencia solo
 window.addEventListener('pagehide', () => { if (leading) flushRemote().catch(() => {}); });
 navigator.connection?.addEventListener?.('change', kick);
+// red nueva: vale la pena volver a intentar la conexión directa
+window.addEventListener('online', () => { rtcFails = 0; rtcNext = 0; });
 
+/** Para probar la conexión directa: cortarla o volverla un "agujero negro" (se traga todo). */
+export const _p2p = {
+  kill() { peer?.close(true); },
+  blackhole() { if (!peer) return false; peer.send = peer.sendLossy = () => true; peer.o.onmessage = () => {}; return true; },
+};
 /** Para depurar desde la consola: (await import('./js/net.js'))._debug() */
 export const _debug = () => ({
   conn, born, status, ready, leading, becoming, resigning, leader, welcomed, helloTries,
   broker: BROKERS[brokerIdx % BROKERS.length], connected: !!mq?.connected, sv, sentSv, flushedSv, term, turn, myTurn,
   retainedSv: retained?.sv ?? null, pres: [...pres.values()], outbox: outbox.length,
+  direct: !!peer?.usable, link: fl ? { lk: fl.lk, tx: fl.tx, rx: fl.rx, hold: fl.hold.size } : [...links.values()].map((k) => ({ lk: k.lk, tx: k.tx, rx: k.rx, hold: k.hold.size })),
 });

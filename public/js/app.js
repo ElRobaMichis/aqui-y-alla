@@ -1,4 +1,5 @@
 import * as net from './net.js';
+import { probeNat, supported as rtcSupported } from './rtc.js';
 import * as audio from './audio.js';
 import { critter, KINDS, KIND_NAMES, COLORS, COLOR_NAMES } from './critters.js';
 
@@ -394,6 +395,10 @@ function renderSignal() {
     q = r <= 300 ? 4 : r <= 600 ? 3 : r <= 1200 ? 2 : 1;
     txt = `${rtt} ms`;
   }
+  // ⚡ = los dos teléfonos hablan directo, sin pasar por el repetidor
+  const direct = s === 'on' && net.isDirect();
+  el.dataset.direct = direct ? '1' : '';
+  el.title = direct ? 'Conexión directa entre los dos' : 'Calidad de conexión';
   el.dataset.q = q;
   el.querySelector('span').textContent = txt;
 }
@@ -557,6 +562,7 @@ function toggleMenu() {
   m.innerHTML = `
     <button data-act="edit">${icon('pencil')}Cambiar mi timbre</button>
     <button data-act="share">${icon('link')}Copiar invitación</button>
+    <button data-act="net">${icon('bell')}Probar mi conexión</button>
     <button data-act="leave" class="danger">${icon('door')}Salir de la sala</button>`;
   $('.topbar').append(m);
   const close = (ev) => { if (!m.contains(ev.target) && ev.target.id !== 'menu-btn') { m.remove(); document.removeEventListener('pointerdown', close); } };
@@ -566,8 +572,32 @@ function toggleMenu() {
     m.remove(); document.removeEventListener('pointerdown', close);
     if (a === 'edit') editProfile();
     if (a === 'share') share();
+    if (a === 'net') testConnection();
     if (a === 'leave') confirmLeave();
   });
+}
+
+/** ¿La red de este teléfono permite hablar directo con el otro? (se prueba con dos servidores STUN) */
+async function testConnection() {
+  const P = 'style="margin:0;color:var(--ink-2);font-weight:600"';
+  const m = modal(`<div class="overlay-card"><h2>Probando tu conexión…</h2><p ${P}>Tarda unos segundos.</p></div>`);
+  const link = net.getLinkRtt();
+  const now = net.isDirect() ? 'directa entre los dos ⚡' : 'por el repetidor';
+  let verdict;
+  if (!rtcSupported()) verdict = 'Este navegador no permite conexión directa: las partidas van por el repetidor.';
+  else {
+    const r = await probeNat().catch(() => null);
+    if (!r || (r.v4 === 'sin respuesta' && !r.v6)) verdict = 'No se pudo probar ahora (sin respuesta). Inténtalo otra vez en un rato.';
+    else if (r.v4 === 'directa' || r.v6) verdict = 'Tu red <b>sí permite</b> conexión directa. Si la de tu persona también, en las partidas se hablan directo (más rápido).';
+    else verdict = 'Tu red <b>no permite</b> conexión directa (pasa con algunas redes celulares). Todo sigue funcionando por el repetidor, solo un poco más lento.';
+  }
+  if (!m.isConnected) return;
+  m.querySelector('.modal').innerHTML = `<div class="overlay-card">
+    <h2>Tu conexión</h2>
+    <p ${P}>${verdict}</p>
+    <p ${P}>Ahora mismo: ${now}${link ? ` · ${link} ms a tu repetidor` : ''}</p>
+    <div class="actions"><button class="btn primary" data-ok>Listo</button></div></div>`;
+  m.querySelector('[data-ok]').addEventListener('click', () => m.remove());
 }
 
 function modal(html, { dismissable = true } = {}) {
@@ -648,6 +678,7 @@ function gameCtx() {
     send: (o) => net.send(o),
     rtt: () => net.getRtt(),
     busy: () => net.congested(),
+    direct: () => net.isDirect(),
     sfx: audio.sfx,
     toast,
     confetti,
@@ -797,6 +828,7 @@ net.on('status', (s) => {
   else delete document.body.dataset.net;
 });
 net.on('rtt', renderSignal);
+net.on('direct', renderSignal);
 
 net.on('welcome', (m) => {
   const firstTime = !state.room;

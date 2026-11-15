@@ -12,6 +12,7 @@ const FILES = [
   'js/audio.js',
   'js/critters.js',
   'js/mqtt.js',
+  'js/rtc.js',
   'js/net.js',
   'js/room-core.js',
   'js/games/gato.js',
