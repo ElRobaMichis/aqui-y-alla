@@ -644,6 +644,8 @@ function gameCtx() {
     you: state.you,
     player: (id) => state.players.find((p) => p.id === id) || { name: 'Alguien', look: { k: 'ajolote', c: 0 }, on: false },
     send: (o) => net.send(o),
+    rtt: () => net.getRtt(),
+    busy: () => net.congested(),
     sfx: audio.sfx,
     toast,
     confetti,

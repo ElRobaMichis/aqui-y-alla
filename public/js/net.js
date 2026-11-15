@@ -52,7 +52,10 @@ const BACKOFF = [0, 500, 1000, 2000, 4000, 8000, 15000];
 const SETTLE = 500;            // tras suscribirse, cuánto esperar lo retenido (llega justo después)
 const HELLO_RETRY = 3500;
 const HELLO_FAST = 600;        // margen para un "hola" que se cruzó con el anuncio del líder
-const SAVE_DEBOUNCE = 350;
+// cada guardado sube la sala entera (~6 KB) al repetidor: según qué cambió, se espera más o menos
+// para juntar varios cambios en una sola subida
+const SAVE_SOON = 350;          // jugadas e invitaciones: que no se pierdan si este teléfono se apaga
+const SAVE_LATER = 1500;        // chat, entradas y salidas (los mensajes quedan protegidos hasta guardarse)
 const PRES_REFRESH = 50_000;   // la presencia se renueva; si se queda vieja, no cuenta
 const PRES_STALE = 150_000;
 export const CODE_LEN = 6;
@@ -152,6 +155,8 @@ let recvQ = Promise.resolve(), sendQ = Promise.resolve();
 
 export const getStatus = () => status;
 export const getRtt = () => rtt;
+/** La conexión tiene cosas atoradas por salir (señal mala): mejor no mandar lo que no es urgente. */
+export const congested = () => (mq?.ws?.bufferedAmount ?? 0) > 2048;
 export const getSession = () => session;
 /** Lo que todavía no confirma el árbitro (lo que ya aceptó el mío no se muestra como pendiente). */
 export const pending = () => outbox.filter((o) => o.held == null).map(({ cid, x, ts }) => ({ cid, x, ts }));
@@ -454,7 +459,7 @@ function publishPresence() {
 /** Suelto la sala de golpe y sin guardar: otro ya la lleva con un estado que vale más que el
     mío. (Lo que este turno tuviera a medio subir ya no sale: pisaría lo del nuevo líder.) */
 function abdicate() {
-  if (leading) { leading = false; core = null; clearTimeout(saveTimer); deadTerm = term; }
+  if (leading) { leading = false; core = null; clearTimeout(saveTimer); saveTimer = null; deadTerm = term; }
   welcomed = false;
   publishPresence();
 }
@@ -539,7 +544,7 @@ async function stepDown(flush) {
   if (!leading || resigning) return;
   const c = mq;
   resigning = true;
-  clearTimeout(saveTimer);
+  clearTimeout(saveTimer); saveTimer = null;
   if (flush) {
     try { await Promise.race([flushRemote(), new Promise((r) => setTimeout(r, 2500))]); } catch {}
     if (mq !== c) return; // se cayó la conexión mientras tanto: ya se limpió todo y esto es de otra
@@ -657,7 +662,7 @@ const coreOut = {
   },
   save,
   empty() {
-    clearTimeout(saveTimer);
+    clearTimeout(saveTimer); saveTimer = null;
     latest = null; // la sala ya no existe: que ningún guardado pendiente la reviva
     const c = mq, topic = T('s');
     // por la cola, para que salga después de cualquier guardado que ya iba de camino
@@ -667,16 +672,25 @@ const coreOut = {
 };
 
 let latest = null;
-function save() {
+/** level: 'soon' | 'later' | 'lazy' (lazy = "visto": se sube con lo siguiente o al salir) */
+function save(level = 'later') {
   if (!core) return;
   latest = { ...core.snapshot(), sv: ++sv, term, lt: myTurn };
   try { localStorage.setItem(snapKey(keys.code), JSON.stringify(latest)); } catch {}
+  if (level !== 'lazy') scheduleFlush(level === 'soon' ? SAVE_SOON : SAVE_LATER);
+}
+let saveDue = 0;
+/** Sube la sala en `ms`, salvo que ya haya una subida programada antes (esa se lleva lo último). */
+function scheduleFlush(ms) {
+  const due = Date.now() + ms;
+  if (saveTimer && saveDue <= due) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => flushRemote().catch(() => {}), SAVE_DEBOUNCE);
+  saveDue = due;
+  saveTimer = setTimeout(() => { saveTimer = null; flushRemote().catch(() => {}); }, ms);
 }
 /** Sube el estado al repetidor (si hay algo nuevo). La promesa se cumple cuando lo confirma. */
 function flushRemote() {
-  clearTimeout(saveTimer);
+  clearTimeout(saveTimer); saveTimer = null;
   const s = latest;
   if (!s || !mq?.connected || s.code !== keys?.code || s.sv <= flushedSv) return Promise.resolve();
   if (s.sv <= sentSv && flushing) return flushing; // esa versión ya va en camino
@@ -693,7 +707,7 @@ function flushRemote() {
       if (sentSv === s.sv) sentSv = flushedSv;
       // no se confirmó pero la conexión sigue: reintentar en un momento (si no, lo último
       // se quedaría solo en este teléfono hasta el siguiente cambio)
-      if (leading) { clearTimeout(saveTimer); saveTimer = setTimeout(() => flushRemote().catch(() => {}), 2000); }
+      if (leading) scheduleFlush(2000);
     }
     throw e;
   });

@@ -30,8 +30,16 @@ siguiente; los dos teléfonos usan el mismo orden.
 
 - **~50 KB** la primera vez (comprimido; ~65 KB con el motor del billar). Después el navegador lo guarda en caché. Sin fuentes, imágenes ni audio descargado: los
   personajes son SVG hechos con código y la música/efectos se sintetizan en el navegador.
-- **Mensajes binarios diminutos**: un mensaje de chat son ~100 bytes cifrados. El estado de
-  la sala solo se sube cuando cambia (comprimido) y el invitado no lo descarga.
+- **Se guarda en el teléfono** (service worker): después de la primera visita abre al instante
+  sin descargar nada, y cada versión nueva se baja una sola vez.
+- **Mensajes binarios diminutos**: un mensaje de chat son ~100 bytes cifrados y un tiro de billar
+  algo parecido. El estado de la sala solo se sube cuando cambia (comprimido, juntando varios
+  cambios; los "visto" esperan a lo siguiente) y el invitado no lo descarga.
+- **La puntería en vivo se adapta a la señal**: con buena señal se ve fluida; con señal mala se
+  manda menos seguido y con señal pésima se apaga (el otro solo ve el tiro).
+- **Tirar sin señal**: el tiro se juega en tu pantalla, se queda en cola y se manda solo al
+  volver la conexión (como el chat). Los tiempos de espera crecen con la latencia medida, así
+  que una conexión lenta (3G, una rayita) no se corta por impaciente.
 - **Aguanta cambios de red** (wifi ⇄ datos): reconexión inmediata, detección de conexiones
   "zombis", reanudación con token y solo se pide el historial que falta. Los mensajes que se
   mandan sin señal quedan en cola y se reenvían sin duplicarse.

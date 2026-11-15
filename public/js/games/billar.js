@@ -66,6 +66,7 @@ export function mount(root, ctx) {
   let g = null;                 // estado confirmado
   let anim = null;              // { sim, t0, ids, queued }
   let pendingShot = null;       // { v, mv }
+  let limbo = null;             // cómo quedó la mesa tras mi tiro, mientras el árbitro aún no lo confirma (p. ej. sin señal)
   let aim = { dx: 1, dy: 0 };
   let power = 0;
   let spin = { sx: 0, sy: 0 };
@@ -221,6 +222,7 @@ export function mount(root, ctx) {
   function ballsNow() {
     // durante la animación: posiciones interpoladas; si no, las del estado
     if (anim) return anim.current;
+    if (pendingShot && limbo) return limbo;
     const r = round();
     if (!r) return [];
     // con bola en mano, la blanca es la que se está colocando: nunca la que dejó la mesa
@@ -568,6 +570,7 @@ export function mount(root, ctx) {
     if (fi >= nFrames - 1) {
       const done = a.done;
       anim = null;
+      limbo = cur.filter((b) => b.alpha === 1).map(({ id, x, y }) => ({ id, x, y, alpha: 1 }));
       done?.();
       updateUI();
     }
@@ -682,17 +685,32 @@ export function mount(root, ctx) {
     tip.textContent = t ? t[1] : 'Toca o arrastra en la mesa para apuntar · jala la barra para tirar';
   }
 
+  // la puntería en vivo es lo que más datos gasta: con buena señal se manda seguido, con
+  // señal mala cada vez menos, y con señal pésima nada (el otro solo ve el tiro)
+  function aimEvery() {
+    const rtt = ctx.rtt();
+    let ms = rtt == null ? 150 : rtt < 150 ? 100 : rtt < 300 ? 160 : rtt < 600 ? 300 : rtt < 1200 ? 600 : 0;
+    if (ms && navigator.connection?.saveData) ms *= 2;
+    return ms;
+  }
+  const q4 = (v) => Math.round(v * 1e4) / 1e4; // (es solo para dibujar: no hace falta más precisión)
   function sendAim() {
     if (!myTurn()) return;
+    const every = aimEvery();
+    if (!every) return;
     const now = performance.now();
     const doSend = () => {
-      lastAimSent = performance.now(); aimTimer = null;
-      const a = { dx: aim.dx, dy: aim.dy, p: power, sx: spin.sx, sy: spin.sy };
-      if (round().hand && cuePos) { a.cx = cuePos.x; a.cy = cuePos.y; }
+      aimTimer = null;
+      if (!myTurn()) return;
+      // si lo anterior aún no sale (red atascada), no apilar más: se manda lo último después
+      if (ctx.busy()) { aimTimer = setTimeout(doSend, every); return; }
+      lastAimSent = performance.now();
+      const a = { dx: q4(aim.dx), dy: q4(aim.dy), p: q4(power), sx: spin.sx, sy: spin.sy };
+      if (round().hand && cuePos) { a.cx = q4(cuePos.x); a.cy = q4(cuePos.y); }
       ctx.send({ t: 'g:aim', a });
     };
-    if (now - lastAimSent > 90) doSend();
-    else if (!aimTimer) aimTimer = setTimeout(doSend, 90 - (now - lastAimSent));
+    if (now - lastAimSent > every) doSend();
+    else if (!aimTimer) aimTimer = setTimeout(doSend, every - (now - lastAimSent));
   }
 
   function shoot() {
@@ -701,7 +719,9 @@ export function mount(root, ctx) {
     if (r.hand) mv.cue = { x: cuePos.x, y: cuePos.y };
     const prep = prepare(r, mv);
     if (!prep.ok) { ctx.sfx.error(); ctx.toast('Ese tiro no se puede'); return; }
-    if (!ctx.send({ t: 'g:move', v: g.v, m: mv })) { ctx.toast('Sin conexión… espera un momento'); ctx.sfx.error(); power = 0; renderPower(); return; }
+    // sin señal el tiro igual se juega en tu pantalla y se manda solo en cuanto vuelva la conexión
+    // (al reconectar llega una bienvenida y ahí se reenvía; el árbitro rechaza repetidos por la versión)
+    if (!ctx.send({ t: 'g:move', v: g.v, m: mv })) ctx.toast('Sin señal: tu tiro se manda en cuanto vuelva');
     clearTimeout(aimTimer); aimTimer = null;
     pendingShot = { v: g.v, mv };
     power = 0; renderPower();
@@ -717,7 +737,7 @@ export function mount(root, ctx) {
     const prevTurnSeat = g?.round?.turn;
     const prevV = g?.v;
     g = next;
-    pendingShot = null;
+    pendingShot = null; limbo = null;
     if (!g) return;
     const r = g.round;
     if (ev.k === 'round' || ev.k === 'start') orient.clear();
@@ -852,7 +872,7 @@ export function mount(root, ctx) {
       if (ev.k === 'move' && ev.by === ctx.you && anim) { queued = { g: next, ev }; pendingShot = null; return; }
       if (ev.k === 'sync' && pendingShot) {
         // el servidor no aceptó el tiro: cortar animación y regresar al estado bueno
-        anim = null; queued = null; ctx.sfx.error();
+        anim = null; queued = null; limbo = null; ctx.sfx.error();
         apply(next, ev); return;
       }
       if (ev.k === 'welcome' && pendingShot && next.v === pendingShot.v) { ctx.send({ t: 'g:move', v: next.v, m: pendingShot.mv }); return; }

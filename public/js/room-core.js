@@ -2,7 +2,8 @@
 // Ahora corre en el navegador de quien "lleva" la sala en ese momento (el líder): el otro
 // le manda sus mensajes por el repetidor y el líder contesta igual que lo hacía el servidor.
 // Es una máquina de estados pura: no sabe nada de red ni de almacenamiento; para eso
-// recibe `out` = { send(conn, msg), kick(conn, code), save(), empty() }.
+// recibe `out` = { send(conn, msg), kick(conn, code), save(level), empty() }.
+// level: 'soon' (jugadas), 'later' (lo normal), 'lazy' ("visto": puede esperar).
 
 import * as gato from './games/gato-rules.js';
 
@@ -90,7 +91,7 @@ export class Core {
   send(conn, o) { if (conn) this.out.send(conn, o); }
   bcast(o, except) { for (const p of this.room.players) if (p !== except && p.conn) this.out.send(p.conn, o); }
   presence() { this.bcast({ t: 'presence', players: this.room.players.map(pub) }); }
-  save() { this.out.save(); }
+  save(level) { this.out.save(level); }
 
   /** Llega un mensaje de una conexión. */
   message(conn, m) {
@@ -136,7 +137,7 @@ export class Core {
         if (id > (me.seen || 0)) {
           me.seen = id;
           this.bcast({ t: 'seen', f: me.id, id }, me);
-          this.save();
+          this.save('lazy');
         }
         return;
       }
@@ -228,7 +229,7 @@ export class Core {
     const room = this.room;
     const g = room.game;
     const sync = (err) => this.send(conn, { t: 'g:state', g: room.game ?? null, ev: { k: 'sync', err } });
-    const push = (ev) => { this.bcast({ t: 'g:state', g: room.game, ev }); this.save(); };
+    const push = (ev) => { this.bcast({ t: 'g:state', g: room.game, ev }); this.save('soon'); };
 
     switch (m.t) {
       case 'g:invite': {
