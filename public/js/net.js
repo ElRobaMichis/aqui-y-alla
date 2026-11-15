@@ -322,6 +322,7 @@ function teardown(graceful) {
   retained = null; sSubscribed = sSettled = false;
   sentSv = 0; flushing = null;
   mqAwait = pingAwait = leaderMiss = 0; // los pings pendientes eran de la conexión anterior
+  probing = false; clearTimeout(probeShow);
   for (const w of snapWaiters) w();
   snapWaiters.clear();
   if (mq) {
@@ -352,7 +353,10 @@ async function connect() {
   mq = c;
 
   // en redes lentas el handshake tarda: el límite crece con cada intento
-  const openTimeout = Math.min(10_000 + attempt * 4000, 30_000);
+  // si la red es conocida y buena, un intento que no abre en unos segundos está atorado (pasa
+  // al volver de otra app): mejor otro intento ya. Con red lenta (o desconocida) se espera más.
+  const first = mqRtt ? Math.min(Math.max(3000, 12 * mqRtt), 10_000) : 10_000;
+  const openTimeout = Math.min(first + attempt * 4000, 30_000);
   const openAt = Date.now();
   openTimer = setTimeout(() => {
     if (c.connected) return;
@@ -360,7 +364,8 @@ async function connect() {
     // sonó tarde es que el teléfono durmió la página a medio intento: eso no cuenta, o cada
     // quien acabaría en un repetidor distinto.)
     const slept = Date.now() - openAt > openTimeout + 2000;
-    if (!slept && ++brokerFails >= 3) { brokerIdx++; brokerFails = 0; }
+    // (los plazos cortos de "al volver" no cuentan: no es que el repetidor esté caído)
+    if (!slept && openTimeout >= 8000 && ++brokerFails >= 3) { brokerIdx++; brokerFails = 0; }
     retry();
   }, openTimeout);
 
@@ -391,6 +396,8 @@ async function connect() {
   };
   c.onpong = () => {
     mqLastPong = Date.now();
+    // el sondeo al volver contestó: la conexión seguía viva
+    if (probing) { probing = false; clearTimeout(probeShow); if (status === 'connecting' && welcomed) setStatus('on'); }
     if (mqAwait) { const ms = performance.now() - mqAwait; noteMqRtt(ms); if (leading) setRtt(Math.round(ms)); mqAwait = 0; }
   };
   c.onmessage = (topic, payload) => {
@@ -881,13 +888,18 @@ function retry() {
   if (closedOnPurpose || !joinReq) return;
   setStatus('connecting');
   setRtt(null);
-  const base = BACKOFF[Math.min(attempt, BACKOFF.length - 1)];
+  // recién de vuelta de otra app la red del teléfono tarda un momento en despertar y los
+  // primeros intentos fallan al instante: reintentar rápido, sin la espera creciente
+  const fresh = Date.now() - resumedAt < 8000;
+  const base = fresh ? Math.min(300, BACKOFF[Math.min(attempt, BACKOFF.length - 1)]) : BACKOFF[Math.min(attempt, BACKOFF.length - 1)];
   const delay = base * (0.8 + Math.random() * 0.4); // con un poco de azar
   attempt++;
   retryTimer = setTimeout(connect, delay);
 }
 
 let kickTimer = null;
+let probing = false, probeShow = null;
+let hiddenAt = 0, awayFor = 0, resumedAt = 0;   // para saber cuánto estuvo en otra app
 function kick() {
   // varios eventos llegan juntos (online + focus + visible): los agrupamos
   clearTimeout(kickTimer);
@@ -903,19 +915,29 @@ function doKick() {
     return;
   }
   // la página estuvo dormida más de lo que el repetidor espera sin oírme: ya me dio por
-  // muerto, no hace falta sondear
-  if (Date.now() - mqLastPong > KEEPALIVE * 1500) { retry(); return; }
-  // sondeo rápido: si en 2.5 s el repetidor no contesta, la conexión está muerta (típico al cambiar de red)
+  // muerto, no hace falta sondear. En iPhone, tras ~20 s en otra app la conexión casi nunca
+  // sobrevive: tampoco vale la pena esperar el sondeo.
+  if (Date.now() - mqLastPong > KEEPALIVE * 1500 || awayFor > 20_000) { awayFor = 0; attempt = 0; retry(); return; }
+  // sondeo rápido: si el repetidor no contesta pronto, la conexión está muerta (típico al
+  // volver de otra app o al cambiar de red). El repetidor contesta en una ida y vuelta.
   const c = mq;
   mqAwait = performance.now();
   c.ping();
   const probe = mqAwait;
-  setTimeout(() => { if (mq === c && mqAwait === probe) retry(); }, slow(2500, 3));
+  probing = true;
+  // si tarda, que se vea "conectando" en vez de parecer congelado
+  clearTimeout(probeShow);
+  probeShow = setTimeout(() => { if (probing && mq === c) setStatus('connecting'); }, 500);
+  setTimeout(() => { if (mq === c && mqAwait === probe) { probing = false; attempt = 0; retry(); } }, Math.max(1200, slow(0, 4)));
 }
 window.addEventListener('online', kick);
 window.addEventListener('focus', kick);
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) kick();
+  if (document.hidden) hiddenAt = Date.now();
+  else {
+    if (hiddenAt) { awayFor = Date.now() - hiddenAt; resumedAt = Date.now(); hiddenAt = 0; }
+    kick();
+  }
   if (status === 'on') up({ t: 'away', on: document.hidden });
   if (!mq?.connected) return;
   // me voy a segundo plano siendo líder: el estado y el aviso salen ya, uno tras otro y sin
