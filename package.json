@@ -1,0 +1,16 @@
+{
+  "name": "aqui-y-alla",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rinconcito para jugar en pareja a distancia: sala, chat, reacciones y minijuegos.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test/physics.mjs && node test/billar.mjs && node test/core.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
