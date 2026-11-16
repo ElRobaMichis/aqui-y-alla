@@ -66,6 +66,16 @@ siguiente; los dos teléfonos usan el mismo orden.
   como árbitro y los dos navegadores animan exactamente el mismo tiro: por la red
   solo viaja el tiro (fuerza, dirección y punto de golpe). La puntería del otro se ve
   en vivo. En celular hay modo "mesa grande" y acomodos para vertical y horizontal.
+- **Minigolf** (`golf-*.js`): nueve hoyos con tema mexicano — la cuadra (topes y un vocho),
+  el metro (entras por la escalera y sales en el otro andén), Xochimilco (canal con
+  trajineras y un puentecito), la glorieta, la pirámide (el hoyo hasta arriba), el mercado
+  (zigzag entre puestos y costales), lucha libre (las cuerdas rebotan más fuerte), Día de
+  muertos (pétalos que frenan, calaveritas) y el Zócalo (carrito de elotes que se mueve).
+  Se apunta como resortera: tocas, jalas hacia atrás y sueltas. Alternan golpes, agua = +1,
+  máximo 6 golpes por hoyo. Recorrido completo o "rapidito" de 3 hoyos. Física determinista
+  como la del billar (el obstáculo que se mueve va sincronizado por la hora del sistema), y
+  `test/golf.mjs` pone a un robot a jugar cada hoyo para asegurar que se pueda terminar.
+  Con el celular parado, el hoyo se gira para usar toda la pantalla.
 - Las reglas (`*-rules.js`) las usan **el líder como árbitro** y cada navegador para
   mostrar tu jugada al instante. Cada jugada lleva la versión del estado: jugadas
   repetidas o atrasadas se rechazan, y tras un corte se recupera la partida tal cual.
@@ -75,7 +85,7 @@ siguiente; los dos teléfonos usan el mismo orden.
 
 ```bash
 npm start          # http://localhost:3000 (solo sirve los archivos; usa el mismo repetidor)
-npm test           # física + reglas del billar + lógica de sala
+npm test           # física y reglas del billar, minigolf, lógica de sala, caché
 ```
 
 Para probar a las dos personas en el mismo navegador, abre una segunda pestaña con
@@ -97,7 +107,7 @@ public/js/rtc.js        conexión directa entre teléfonos (WebRTC) y prueba de 
 public/js/room-core.js  lógica de la sala (la corre el líder)
 public/js/audio.js      música generativa lo-fi y efectos, todo sintetizado
 public/js/critters.js   personajes (ajolote, gato, conejo, osito, rana)
-public/js/games/        gato y billar (reglas, física e interfaz)
+public/js/games/        gato, billar y minigolf (reglas, física, hoyos e interfaz)
 server.js               servidor de archivos para desarrollo
 test/                   pruebas
 ```

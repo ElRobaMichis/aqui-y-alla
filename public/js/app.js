@@ -43,6 +43,8 @@ const GAMES = [
     art: `<svg viewBox="0 0 70 70"><path d="M25 8v54M45 8v54M8 25h54M8 45h54" stroke="#22283F" stroke-width="4" stroke-linecap="round"/><path d="M12 12l9 9M21 12l-9 9" stroke="#E2553F" stroke-width="4.5" stroke-linecap="round"/><circle cx="35" cy="35" r="5.5" fill="none" stroke="#22283F" stroke-width="4"/><path d="M49 49l9 9M58 49l-9 9" stroke="#E2553F" stroke-width="4.5" stroke-linecap="round"/></svg>` },
   { id: 'billar', ready: true, name: 'Billar', desc: 'Bola 8 con efecto, fuerza y física de verdad.', g: 'var(--mint)',
     art: `<svg viewBox="0 0 70 70"><rect x="6" y="14" width="58" height="42" rx="7" fill="#2E7D6B" stroke="#22283F" stroke-width="3.5"/><circle cx="12" cy="20" r="3.5" fill="#22283F"/><circle cx="58" cy="20" r="3.5" fill="#22283F"/><circle cx="12" cy="50" r="3.5" fill="#22283F"/><circle cx="58" cy="50" r="3.5" fill="#22283F"/><circle cx="44" cy="33" r="6" fill="#EDB447" stroke="#22283F" stroke-width="2.5"/><circle cx="50" cy="41" r="6" fill="#E2553F" stroke="#22283F" stroke-width="2.5"/><circle cx="22" cy="37" r="6" fill="#FFF7EA" stroke="#22283F" stroke-width="2.5"/><path d="M4 66 L17 42" stroke="#F3E3C3" stroke-width="5" stroke-linecap="round"/><path d="M4 66 L17 42" stroke="#22283F" stroke-width="1.5" stroke-linecap="round" fill="none" opacity=".6"/></svg>` },
+  { id: 'golf', ready: true, name: 'Minigolf', desc: 'Nueve hoyos chilangos: el metro, Xochimilco, la pirámide…', g: 'var(--butter)',
+    art: `<svg viewBox="0 0 70 70"><path d="M6 52c10-6 20-8 30-6s20 2 28-4v14H6z" fill="#6CB06A" stroke="#22283F" stroke-width="3.5" stroke-linejoin="round"/><ellipse cx="46" cy="49" rx="7" ry="3" fill="#22283F"/><path d="M46 49V14" stroke="#22283F" stroke-width="3.5" stroke-linecap="round"/><path d="M46 14l17 6-17 7z" fill="#E2553F" stroke="#22283F" stroke-width="3" stroke-linejoin="round"/><circle cx="22" cy="44" r="6" fill="#FFF7EA" stroke="#22283F" stroke-width="3"/></svg>` },
   { id: 'memo', name: 'Memorama', desc: 'Encuentren los pares por turnos.', g: 'var(--pink)',
     art: `<svg viewBox="0 0 70 70"><rect x="9" y="14" width="24" height="34" rx="4" fill="#FFF9EF" stroke="#22283F" stroke-width="3.5" transform="rotate(-8 21 31)"/><rect x="36" y="20" width="24" height="34" rx="4" fill="#EDB447" stroke="#22283F" stroke-width="3.5" transform="rotate(7 48 37)"/><path d="M21 27c-3-4-8-1-5 3l5 5 5-5c3-4-2-7-5-3z" fill="#E2553F" transform="rotate(-8 21 31)"/></svg>` },
   { id: 'dibujo', name: 'Dibujitos', desc: 'Uno dibuja, el otro adivina.', g: 'var(--butter)',
@@ -656,8 +658,14 @@ async function share() {
 /* ───────────── juegos ───────────── */
 
 // cada juego se descarga solo cuando se juega (la carga inicial sigue siendo mínima)
-const GAME_MODULES = { gato: () => import('./games/gato.js'), billar: () => import('./games/billar.js') };
+const GAME_MODULES = { gato: () => import('./games/gato.js'), billar: () => import('./games/billar.js'), golf: () => import('./games/golf.js') };
 const MODE_INFO = {
+  golf: [
+    { id: '9', name: 'Recorrido completo', desc: 'Los 9 hoyos: la cuadra, el metro, Xochimilco, la glorieta, la pirámide, el mercado, lucha libre, Día de muertos y el Zócalo.',
+      art: '<svg viewBox="0 0 60 60"><path d="M30 50V12" stroke="#22283F" stroke-width="3.5" stroke-linecap="round"/><path d="M30 12l16 6-16 7z" fill="#E2553F" stroke="#22283F" stroke-width="3" stroke-linejoin="round"/><text x="16" y="50" text-anchor="middle" font-size="18" font-weight="900" fill="#22283F" font-family="system-ui">9</text></svg>' },
+    { id: '3', name: 'Rapidito', desc: 'Tres hoyos al azar, para una partida corta.',
+      art: '<svg viewBox="0 0 60 60"><path d="M30 50V12" stroke="#22283F" stroke-width="3.5" stroke-linecap="round"/><path d="M30 12l16 6-16 7z" fill="#6FB3A3" stroke="#22283F" stroke-width="3" stroke-linejoin="round"/><text x="16" y="50" text-anchor="middle" font-size="18" font-weight="900" fill="#22283F" font-family="system-ui">3</text></svg>' },
+  ],
   gato: [
     { id: 'classic', name: 'Clásico', desc: 'El de toda la vida. Tablero lleno = empate.',
       art: '<svg viewBox="0 0 60 60"><path d="M21 6v48M39 6v48M6 21h48M6 39h48" stroke="#22283F" stroke-width="3.5" stroke-linecap="round"/><path d="M9 9l8 8M17 9l-8 8M43 43l8 8M51 43l-8 8" stroke="#E2553F" stroke-width="4" stroke-linecap="round"/><circle cx="30" cy="30" r="5" fill="none" stroke="#2F7F72" stroke-width="4"/><circle cx="47" cy="13" r="5" fill="none" stroke="#2F7F72" stroke-width="4"/></svg>' },

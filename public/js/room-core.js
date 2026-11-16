@@ -29,9 +29,18 @@ export const GAMES = {
   },
 };
 
-// el billar trae su motor de física: se carga aparte, una sola vez
-let billarLoad = null;
+// el billar y el minigolf traen su motor de física: se cargan aparte, una sola vez
+let billarLoad = null, golfLoad = null;
 export function loadGames() {
+  golfLoad ??= import('./games/golf-rules.js').then((golf) => {
+    GAMES.golf = {
+      modes: golf.MODES,
+      newRound: (mode, starter) => golf.newRound(mode, starter),
+      play: (round, seat, mv) => golf.play(round, seat, mv),
+      isOver: golf.isOver,
+      live: true,
+    };
+  }).catch((e) => { golfLoad = null; console.warn('minigolf no disponible', e); });
   billarLoad ??= import('./games/billar-rules.js').then((billar) => {
     GAMES.billar = {
       modes: billar.MODES,
@@ -41,7 +50,7 @@ export function loadGames() {
       live: true, // retransmite la puntería en vivo (no se guarda)
     };
   }).catch((e) => { billarLoad = null; console.warn('billar no disponible', e); });
-  return billarLoad;
+  return Promise.all([billarLoad, golfLoad]);
 }
 
 function rid(n = 6) {

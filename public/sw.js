@@ -20,6 +20,10 @@ const FILES = [
   'js/games/billar.js',
   'js/games/billar-rules.js',
   'js/games/billar-physics.js',
+  'js/games/golf.js',
+  'js/games/golf-rules.js',
+  'js/games/golf-physics.js',
+  'js/games/golf-courses.js',
 ];
 
 self.addEventListener('install', (e) => {

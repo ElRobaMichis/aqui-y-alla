@@ -1036,3 +1036,48 @@ svg.icon { width: 22px; height: 22px; display: block; flex: none; }
   .pool .chip-av .critter { width: 30px; }
   .pool .chip-score { font-size: 18px; }
 }
+
+/* ───────────── minigolf ───────────── */
+
+.golf { display: grid; gap: 10px; justify-items: center; width: 100%; }
+.golf .game-head, .golf .vs { max-width: 560px; }
+/* el ancho lo decide la pantalla, nunca el canvas (si no, se empujan y sale barra de scroll); el
+   relleno deja ver la sombra dura */
+.golf-main { width: 100%; min-width: 0; overflow: hidden; display: flex; justify-content: center; padding: 0 6px 6px 0; box-sizing: border-box; }
+.golf-course { position: relative; line-height: 0; border-radius: 12px; }
+.golf-course canvas { border-radius: 10px; box-shadow: 5px 5px 0 var(--ink); touch-action: none; }
+.golf.my-turn .golf-course canvas { cursor: grab; }
+.golf.my-turn .golf-course canvas:active { cursor: grabbing; }
+.golf-tip { margin: 0; max-width: 560px; text-align: center; font-size: 12px; font-weight: 700; color: var(--ink-2); line-height: 1.35; min-height: 1.35em; }
+.golf-sum { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 800; color: var(--ink-2); white-space: nowrap; }
+.golf-now { font-size: 11px; font-weight: 700; color: var(--ink-3); }
+.chip[data-seat="1"] .golf-sum { justify-content: flex-end; }
+.gb { width: 10px; height: 10px; border-radius: 50%; background: var(--c); border: 1.5px solid var(--ink); flex: none; }
+
+/* cartel de "Hoyo 3 · Xochimilco" al empezar cada hoyo */
+.golf-banner {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: grid; justify-items: center; gap: 2px; padding: 12px 18px;
+  background: var(--card); border: var(--bw) solid var(--ink); border-radius: 12px; box-shadow: var(--sh-lg);
+  line-height: 1.2; text-align: center; pointer-events: none;
+  animation: banner-in .35s var(--ease-pop);
+}
+.golf-banner small { font-size: 11px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.golf-banner b { font-family: var(--display); font-size: 24px; }
+.golf-banner span { font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.golf-banner.out { opacity: 0; transform: translate(-50%, -50%) scale(.94); transition: opacity .35s, transform .35s; }
+.golf-banner[hidden] { display: none; }
+@keyframes banner-in { from { opacity: 0; transform: translate(-50%, -40%) scale(.9); } }
+
+/* tarjeta de puntos */
+.golf-card { width: 100%; max-width: 560px; overflow-x: auto; }
+.golf-card[hidden] { display: none; }
+.golf-card table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12px; font-weight: 800; background: var(--card); border: 2px solid var(--ink); border-radius: 10px; overflow: hidden; }
+.golf-card th, .golf-card td { padding: 4px 3px; text-align: center; border-bottom: 1.5px solid var(--paper-2); font-variant-numeric: tabular-nums; min-width: 20px; }
+.golf-card tbody tr:last-child th, .golf-card tbody tr:last-child td { border-bottom: 0; }
+.golf-card tbody th { text-align: left; padding-left: 8px; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.golf-card thead th { background: var(--paper-2); }
+.golf-card .par td, .golf-card .par th { color: var(--ink-3); font-weight: 700; }
+.golf-card td.under { color: var(--teal); }
+.golf-card td.over { color: var(--tomato); }
+.golf-card td.ace { background: var(--butter); }
