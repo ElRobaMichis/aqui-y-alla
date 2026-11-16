@@ -66,16 +66,23 @@ siguiente; los dos teléfonos usan el mismo orden.
   como árbitro y los dos navegadores animan exactamente el mismo tiro: por la red
   solo viaja el tiro (fuerza, dirección y punto de golpe). La puntería del otro se ve
   en vivo. En celular hay modo "mesa grande" y acomodos para vertical y horizontal.
-- **Minigolf** (`golf-*.js`): nueve hoyos con tema mexicano — la cuadra (topes y un vocho),
-  el metro (entras por la escalera y sales en el otro andén), Xochimilco (canal con
-  trajineras y un puentecito), la glorieta, la pirámide (el hoyo hasta arriba), el mercado
-  (zigzag entre puestos y costales), lucha libre (las cuerdas rebotan más fuerte), Día de
-  muertos (pétalos que frenan, calaveritas) y el Zócalo (carrito de elotes que se mueve).
-  Se apunta como resortera: tocas, jalas hacia atrás y sueltas. Alternan golpes, agua = +1,
-  máximo 6 golpes por hoyo. Recorrido completo o "rapidito" de 3 hoyos. Física determinista
-  como la del billar (el obstáculo que se mueve va sincronizado por la hora del sistema), y
-  `test/golf.mjs` pone a un robot a jugar cada hoyo para asegurar que se pueda terminar.
-  Con el celular parado, el hoyo se gira para usar toda la pantalla.
+- **Minigolf** (`golf-*.js`): nueve hoyos grandes con tema mexicano (la cámara sigue a la
+  pelota; un botón enseña el hoyo completo) y mecánicas: la cuadra (baches y un tablón para
+  brincar la zanja de la obra; un micro que cruza), el metro (torniquete que gira y un vagón
+  que te lleva a la otra estación si la pelota se queda adentro), Xochimilco (trajineras que
+  te cruzan el canal), la glorieta (el tráfico gira alrededor del Ángel), la pirámide (el hoyo
+  arriba, dentro de una Piedra del Sol que gira), el mercado (ventiladores que se prenden y
+  apagan, diablitos), lucha libre (cuerdas que rebotan, luchadores que corren), Día de
+  muertos (portal con salida que cambia) y la pista de hielo del Zócalo (el hielo se cuartea
+  con el tiempo que pasan las pelotas encima y se rompe para los dos).
+  Se apunta como resortera: tocas, jalas hacia atrás y sueltas. Alternan golpes, agua/bache/
+  vías = +1, máximo 6 golpes por hoyo. Recorrido completo o "rapidito" de 3 hoyos. Física
+  determinista como la del billar (todo lo que se mueve depende solo de la hora del sistema;
+  los giros usan un seno propio para dar lo mismo en todos los navegadores).
+  `test/golf-tune.mjs` pone robots a jugar miles de tiros por hoyo (uno perfecto y uno que
+  falla como persona) para medir la dificultad y guarda sus soluciones; `test/golf.mjs`
+  las repite para asegurar que cada hoyo se pueda terminar y que ninguno salga de un
+  golpe con fuerza. Con el celular parado, el hoyo se gira para usar toda la pantalla.
 - Las reglas (`*-rules.js`) las usan **el líder como árbitro** y cada navegador para
   mostrar tu jugada al instante. Cada jugada lleva la versión del estado: jugadas
   repetidas o atrasadas se rechazan, y tras un corte se recupera la partida tal cual.

@@ -2,13 +2,14 @@
 //
 //  - Los dos juegan el mismo hoyo, alternando golpes (cada quien su pelota; no chocan entre sí).
 //  - Quien ya metió la suya espera; el otro sigue tirando.
-//  - Agua: un golpe de castigo y la pelota vuelve a donde estaba.
+//  - Agua, bache o vías: un golpe de castigo y la pelota vuelve a donde estaba.
+//  - El hielo se va cuarteando con las dos pelotas (se guarda en `wear` hasta cambiar de hoyo).
 //  - Máximo 6 golpes por hoyo: si no entra, se apunta 7 y se pasa al siguiente.
 //  - Gana quien termine el recorrido con menos golpes. Empate si quedan iguales.
 //  - Cada hoyo lo empieza alguien distinto.
 
 import { HOLES, HOLE_BY_ID } from './golf-courses.js';
-import { simulate, R } from './golf-physics.js';
+import { simulate, iceCount, fallAt, R } from './golf-physics.js';
 
 export const MODES = ['9', '3'];
 export const MAX_STROKES = 6;
@@ -25,6 +26,7 @@ function pickHoles(mode, rnd) {
 }
 
 const teeBalls = (hole) => [0, 1].map(() => ({ x: hole.tee.x, y: hole.tee.y, in: false }));
+const freshIce = (hole) => Array(iceCount(hole)).fill(0);
 
 export function newRound(mode = '9', starter = 0, rnd = Math.random) {
   const holes = pickHoles(mode, rnd);
@@ -32,6 +34,7 @@ export function newRound(mode = '9', starter = 0, rnd = Math.random) {
     holes,
     hole: 0,
     balls: teeBalls(HOLE_BY_ID[holes[0]]),
+    wear: freshIce(HOLE_BY_ID[holes[0]]),
     strokes: [holes.map(() => 0), holes.map(() => 0)],
     turn: starter,
     starter,
@@ -65,7 +68,9 @@ export function prepare(r, seat, mv) {
   const ph = Number.isFinite(mv?.ph) ? Math.min(PHASE_SPAN, Math.max(0, mv.ph)) : 0;
   const ball = r.balls[seat];
   if (ball.in) return { ok: false, err: 'in' };
-  return { ok: true, hole: holeOf(r), ball: { x: ball.x, y: ball.y }, shot, ph };
+  const hole = holeOf(r);
+  const wear = Array.from({ length: iceCount(hole) }, (_, i) => +r.wear?.[i] || 0);
+  return { ok: true, hole, ball: { x: ball.x, y: ball.y }, shot, ph, wear };
 }
 
 /**
@@ -75,7 +80,7 @@ export function prepare(r, seat, mv) {
 export function play(r, seat, mv) {
   const prep = prepare(r, seat, mv);
   if (!prep.ok) return prep;
-  const sim = simulate(prep.hole, prep.ball, prep.shot, prep.ph);
+  const sim = simulate(prep.hole, prep.ball, prep.shot, prep.ph, prep.wear);
   return { ok: true, round: judge(r, seat, sim), sim };
 }
 
@@ -91,9 +96,14 @@ function judge(r, seat, sim) {
   const ball = n.balls[seat];
   let strokes = n.strokes[seat][h] + 1;
   const last = { by: seat, end: sim.end, hole: h };
-  if (sim.end === 'water') { strokes += 1; last.penalty = true; } // vuelve a donde estaba
+  n.wear = sim.wear.map(round6);
+  if (sim.end === 'water') { strokes += 1; last.penalty = true; last.why = sim.why; } // vuelve a donde estaba
   else if (sim.end === 'cup') { ball.x = HOLE_BY_ID[r.holes[h]].cup.x; ball.y = HOLE_BY_ID[r.holes[h]].cup.y; ball.in = true; }
   else { ball.x = round6(sim.x); ball.y = round6(sim.y); }
+  // si donde estaba ya no se puede pisar (se rompió el hielo), de regreso a la salida; lo mismo
+  // para la pelota del otro si estaba quieta encima
+  const hole = HOLE_BY_ID[r.holes[h]];
+  for (const b of n.balls) if (!b.in && fallAt(hole, b.x, b.y, n.wear)) { b.x = hole.tee.x; b.y = hole.tee.y; }
   if (!ball.in && strokes >= MAX_STROKES) { strokes = MAX_STROKES + 1; ball.in = true; last.maxed = true; }
   n.strokes[seat][h] = strokes;
   last.strokes = strokes;
@@ -109,6 +119,7 @@ function judge(r, seat, sim) {
     } else {
       n.hole = h + 1;
       n.balls = teeBalls(HOLE_BY_ID[r.holes[h + 1]]);
+      n.wear = freshIce(HOLE_BY_ID[r.holes[h + 1]]);
       n.turn = (r.starter + h + 1) % 2;
     }
   } else n.turn = n.balls[other].in ? seat : other;
