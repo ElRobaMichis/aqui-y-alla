@@ -27,6 +27,7 @@ jobs:
         with:
           node-version: 24
       - run: npm test
+        timeout-minutes: 5
       # cada publicación = versión nueva de la caché del teléfono (sw.js)
       - run: sed -i "s/const VERSION = 'dev';/const VERSION = '${GITHUB_SHA::10}';/" public/sw.js && grep -n "const VERSION" public/sw.js
       - uses: actions/configure-pages@v5

@@ -147,9 +147,14 @@ export function simulate(hole, ball, shot, t0 = 0) {
   const cup = hole.cup;
   const st = { x: ball.x, y: ball.y, ...launch(shot) };
   const maxSteps = Math.floor(MAX_TIME / STEP);
-  const frames = new Float64Array((Math.floor(maxSteps / REC) + 3) * 3);
+  // los cuadros crecen según se necesiten (casi todos los tiros duran pocos segundos: reservar
+  // los 30 s posibles en cada simulación era mucha memoria para nada)
+  let frames = new Float64Array(256 * 3);
   let n = 0;
-  const rec = (vis) => { frames[n * 3] = st.x; frames[n * 3 + 1] = st.y; frames[n * 3 + 2] = vis; n++; };
+  const rec = (vis) => {
+    if ((n + 1) * 3 > frames.length) { const f = new Float64Array(frames.length * 2); f.set(frames); frames = f; }
+    frames[n * 3] = st.x; frames[n * 3 + 1] = st.y; frames[n * 3 + 2] = vis; n++;
+  };
   const events = [];
   let end = 'stop', hidden = 0, lastHit = -1, inSand = false, lastTunnel = null;
   rec(1);
